@@ -36,9 +36,16 @@ let pinnedKey: string | null = null;
 const frameKey = (tabId: number, frameId: number) => `${tabId}:${frameId}`;
 const sessionKey = (tabId: number, frameId: number, elementId: string) => `${tabId}:${frameId}:${elementId}`;
 
-chrome.sidePanel
-  .setPanelBehavior({ openPanelOnActionClick: true })
-  .catch((err) => console.error('setPanelBehavior failed', err));
+// Open the side panel on toolbar click. Browsers or builds without the Side
+// Panel API (some Chromium forks lag on it) fall back to showing the same UI
+// as the action popup instead of crashing the worker.
+if (typeof chrome.sidePanel?.setPanelBehavior === 'function') {
+  chrome.sidePanel
+    .setPanelBehavior({ openPanelOnActionClick: true })
+    .catch((err) => console.error('setPanelBehavior failed', err));
+} else {
+  void chrome.action.setPopup({ popup: 'panel.html' }).catch(() => {});
+}
 
 // --- panel fan-out -----------------------------------------------------------
 
