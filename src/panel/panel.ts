@@ -6,6 +6,10 @@ import type { MediaCommand, MediaSessionInfo, PanelInbound, PanelOutbound } from
 
 const ICON_PLAY = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
 const ICON_PAUSE = '<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>';
+const ICON_SOUND =
+  '<svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3z"/><path d="M16.5 7.5a6 6 0 0 1 0 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+const ICON_MUTED =
+  '<svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3z"/><path d="M16 9l5 6m0-6l-5 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
 // --- state ---------------------------------------------------------------------
 
@@ -147,6 +151,9 @@ function createCard(initial: MediaSessionInfo): Card {
       <button class="btn transport seek-back" title="Back 10 seconds">&minus;${SEEK_STEP_SECONDS}s</button>
       <button class="btn transport play" title="Play / pause"></button>
       <button class="btn transport seek-fwd" title="Forward 10 seconds">+${SEEK_STEP_SECONDS}s</button>
+      <button class="btn mute" title="Mute / unmute"></button>
+      <input class="volume" type="range" min="0" max="1" step="0.01" title="Volume" />
+      <span class="vol-label"></span>
     </div>
   `;
   const main = root.querySelector('.card-main') as HTMLDivElement;
@@ -158,6 +165,9 @@ function createCard(initial: MediaSessionInfo): Card {
   const seek = root.querySelector('.seek') as HTMLInputElement;
   const timeDur = root.querySelector('.time-dur') as HTMLElement;
   const playBtn = root.querySelector('.play') as HTMLButtonElement;
+  const muteBtn = root.querySelector('.mute') as HTMLButtonElement;
+  const volume = root.querySelector('.volume') as HTMLInputElement;
+  const volLabel = root.querySelector('.vol-label') as HTMLElement;
 
   main.addEventListener('click', () => send({ type: 'focus-tab', tabId: info.tabId }));
   playBtn.addEventListener('click', () => command(info.key, { kind: 'toggle' }));
@@ -176,6 +186,15 @@ function createCard(initial: MediaSessionInfo): Card {
   seek.addEventListener('change', () => {
     scrubbing = false;
     command(info.key, { kind: 'seek-to', time: Number(seek.value) });
+  });
+
+  muteBtn.addEventListener('click', () => command(info.key, { kind: 'set-muted', muted: !info.element.muted }));
+  volume.addEventListener('input', () => {
+    command(info.key, { kind: 'set-volume', volume: Number(volume.value) });
+    volLabel.textContent = `${Math.round(Number(volume.value) * 100)}%`;
+  });
+  volume.addEventListener('change', () => {
+    if (info.element.muted) command(info.key, { kind: 'set-muted', muted: false });
   });
 
   const update = (cur: MediaSessionInfo): void => {
@@ -206,6 +225,9 @@ function createCard(initial: MediaSessionInfo): Card {
       timeDur.classList.remove('live');
     }
     playBtn.innerHTML = el.playing ? ICON_PAUSE : ICON_PLAY;
+    muteBtn.innerHTML = el.muted ? ICON_MUTED : ICON_SOUND;
+    volume.value = String(el.volume);
+    volLabel.textContent = el.muted ? 'Muted' : `${Math.round(el.volume * 100)}%`;
   };
   update(info);
   return { root, update };
