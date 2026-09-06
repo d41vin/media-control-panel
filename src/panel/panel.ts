@@ -3,6 +3,8 @@
 
 import { PANEL_PORT, SEEK_STEP_SECONDS } from '../shared/protocol';
 import type { MediaCommand, MediaSessionInfo, PanelInbound, PanelOutbound } from '../shared/protocol';
+import { clampRate, loadSettings, saveSettings } from '../shared/settings';
+import type { Settings } from '../shared/settings';
 
 const ICON_PLAY = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
 const ICON_PAUSE = '<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>';
@@ -82,9 +84,49 @@ app.innerHTML = `
   <div id="empty" class="empty">
     No media detected.<br />Play a video or audio in any tab and it will show up here.
   </div>
+  <footer class="footer">
+    <label class="footer-row">
+      <input type="checkbox" id="global-rate-enabled" />
+      <span>Default speed for new media</span>
+    </label>
+    <div class="footer-row" id="global-rate-row">
+      <input type="range" id="global-rate" min="0.25" max="4" step="0.05" />
+      <span id="global-rate-value"></span>
+    </div>
+    <p class="footer-hint">Applied when media appears or starts playing; per-item changes win.</p>
+  </footer>
 `;
 const listEl = document.getElementById('list') as HTMLElement;
 const emptyEl = document.getElementById('empty') as HTMLElement;
+
+// --- global settings -----------------------------------------------------------------
+
+let settings: Settings = { globalRateEnabled: false, globalRate: 1 };
+const globalRateEnabled = document.getElementById('global-rate-enabled') as HTMLInputElement;
+const globalRate = document.getElementById('global-rate') as HTMLInputElement;
+const globalRateValue = document.getElementById('global-rate-value') as HTMLElement;
+const globalRateRow = document.getElementById('global-rate-row') as HTMLElement;
+
+function renderSettings(): void {
+  globalRateEnabled.checked = settings.globalRateEnabled;
+  globalRateRow.classList.toggle('disabled', !settings.globalRateEnabled);
+  globalRate.value = String(Math.min(4, Math.max(0.25, settings.globalRate)));
+  globalRateValue.textContent = fmtRate(settings.globalRate);
+}
+
+globalRateEnabled.addEventListener('change', () => {
+  void saveSettings({ globalRateEnabled: globalRateEnabled.checked });
+});
+globalRate.addEventListener('input', () => {
+  const rate = clampRate(Number(globalRate.value));
+  globalRateValue.textContent = fmtRate(rate);
+  void saveSettings({ globalRate: rate });
+});
+
+void loadSettings().then((s) => {
+  settings = s;
+  renderSettings();
+});
 
 function reconcile(): void {
   const seen = new Set<string>();
