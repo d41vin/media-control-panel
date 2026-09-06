@@ -127,6 +127,10 @@ function fmtTime(seconds: number): string {
   return `${h > 0 ? `${h}:` : ''}${mm}:${String(s).padStart(2, '0')}`;
 }
 
+function fmtRate(rate: number): string {
+  return `${Math.round(rate * 100) / 100}\u00d7`;
+}
+
 // --- cards --------------------------------------------------------------------------
 
 function createCard(initial: MediaSessionInfo): Card {
@@ -155,6 +159,11 @@ function createCard(initial: MediaSessionInfo): Card {
       <input class="volume" type="range" min="0" max="1" step="0.01" title="Volume" />
       <span class="vol-label"></span>
     </div>
+    <div class="rate-row">
+      <span class="rate-label">Speed</span>
+      <input class="rate" type="range" min="0.25" max="4" step="0.05" title="Playback speed" />
+      <span class="rate-value"></span>
+    </div>
   `;
   const main = root.querySelector('.card-main') as HTMLDivElement;
   const favicon = root.querySelector('.favicon') as HTMLImageElement;
@@ -168,6 +177,8 @@ function createCard(initial: MediaSessionInfo): Card {
   const muteBtn = root.querySelector('.mute') as HTMLButtonElement;
   const volume = root.querySelector('.volume') as HTMLInputElement;
   const volLabel = root.querySelector('.vol-label') as HTMLElement;
+  const rate = root.querySelector('.rate') as HTMLInputElement;
+  const rateValue = root.querySelector('.rate-value') as HTMLElement;
 
   main.addEventListener('click', () => send({ type: 'focus-tab', tabId: info.tabId }));
   playBtn.addEventListener('click', () => command(info.key, { kind: 'toggle' }));
@@ -195,6 +206,10 @@ function createCard(initial: MediaSessionInfo): Card {
   });
   volume.addEventListener('change', () => {
     if (info.element.muted) command(info.key, { kind: 'set-muted', muted: false });
+  });
+  rate.addEventListener('input', () => {
+    command(info.key, { kind: 'set-rate', rate: Number(rate.value) });
+    rateValue.textContent = fmtRate(Number(rate.value));
   });
 
   const update = (cur: MediaSessionInfo): void => {
@@ -228,6 +243,8 @@ function createCard(initial: MediaSessionInfo): Card {
     muteBtn.innerHTML = el.muted ? ICON_MUTED : ICON_SOUND;
     volume.value = String(el.volume);
     volLabel.textContent = el.muted ? 'Muted' : `${Math.round(el.volume * 100)}%`;
+    rate.value = String(Math.min(4, Math.max(0.25, el.rate)));
+    rateValue.textContent = fmtRate(el.rate);
   };
   update(info);
   return { root, update };

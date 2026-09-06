@@ -210,3 +210,25 @@ input[type='range'] {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
+
+.rate-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.rate-label {
+  flex: none;
+  color: #9a9aa3;
+  font-size: 11px;
+}
+
+.rate-value {
+  flex: none;
+  width: 44px;
+  text-align: right;
+  color: #b9b9c1;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
