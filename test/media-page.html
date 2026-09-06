@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Media Control Panel — Test Page</title>
+    <style>
+      body { font: 14px/1.5 system-ui, sans-serif; max-width: 720px; margin: 24px auto; padding: 0 16px; color: #222; }
+      video, audio { display: block; margin: 8px 0 24px; max-width: 100%; }
+      h1 { font-size: 20px; } h2 { font-size: 15px; margin-bottom: 4px; }
+    </style>
+  </head>
+  <body>
+    <h1>Media Control Panel — Test Page</h1>
+    <p>
+      Serve this folder (<code>npm run serve</code>), open
+      <code>http://localhost:8080/test/media-page.html</code>, then open the Media Control Panel
+      side panel. Every player below should appear as its own card.
+    </p>
+
+    <h2>Video 1 — Big Buck Bunny (remote mp4)</h2>
+    <video src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4" controls width="480"></video>
+
+    <h2>Video 2 — Elephants Dream (remote mp4)</h2>
+    <video src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4" controls width="480"></video>
+
+    <h2>Audio 1 — local tone (generated)</h2>
+    <audio src="media/tone.wav" controls></audio>
+
+    <h2>Audio 2 — remote mp3</h2>
+    <audio src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" controls></audio>
+
+    <h2>Cross-origin frame — YouTube embed</h2>
+    <p>The player lives in a separate frame; it should still be discovered via <code>all_frames</code>.</p>
+    <iframe width="480" height="270" src="https://www.youtube.com/embed/aqz-KE-bpKQ"
+      allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+  </body>
+</html>
