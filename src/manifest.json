@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Media Control Panel",
+  "version": "0.1.0",
+  "description": "Control every video and audio player across your tabs — play, pause, seek, volume and speed — from one lightweight side panel.",
+  "minimum_chrome_version": "116",
+  "permissions": ["tabs", "storage"],
+  "action": {
+    "default_title": "Media Control Panel"
+  },
+  "side_panel": {
+    "default_path": "panel.html"
+  },
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
+}
