@@ -163,6 +163,7 @@ function reconcile(): void {
       listEl.appendChild(card.root);
     }
     card.update(info);
+    card.root.classList.toggle('pinned', info.key === pinnedKey);
   }
   for (const [key, card] of cards) {
     if (!seen.has(key)) {
