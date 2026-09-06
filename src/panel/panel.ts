@@ -1,8 +1,11 @@
 // Side panel UI. Renders one card per media session; owns the keep-alive ping
 // that keeps the service worker alive while the panel is open.
 
-import { PANEL_PORT } from '../shared/protocol';
-import type { MediaSessionInfo, PanelInbound, PanelOutbound } from '../shared/protocol';
+import { PANEL_PORT, SEEK_STEP_SECONDS } from '../shared/protocol';
+import type { MediaCommand, MediaSessionInfo, PanelInbound, PanelOutbound } from '../shared/protocol';
+
+const ICON_PLAY = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
+const ICON_PAUSE = '<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>';
 
 // --- state ---------------------------------------------------------------------
 
@@ -33,6 +36,10 @@ function connect(): void {
 
 function send(msg: PanelInbound): void {
   port?.postMessage(msg);
+}
+
+function command(key: string, cmd: MediaCommand): void {
+  send({ type: 'command', key, command: cmd });
 }
 
 // Keep the service worker alive while the panel exists; if it was reaped while
@@ -133,8 +140,13 @@ function createCard(initial: MediaSessionInfo): Card {
     </div>
     <div class="progress-row">
       <span class="time time-cur"></span>
-      <input class="seek" type="range" min="0" max="0" step="0.1" disabled />
+      <input class="seek" type="range" min="0" max="0" step="0.1" />
       <span class="time time-dur"></span>
+    </div>
+    <div class="controls-row">
+      <button class="btn transport seek-back" title="Back 10 seconds">&minus;${SEEK_STEP_SECONDS}s</button>
+      <button class="btn transport play" title="Play / pause"></button>
+      <button class="btn transport seek-fwd" title="Forward 10 seconds">+${SEEK_STEP_SECONDS}s</button>
     </div>
   `;
   const main = root.querySelector('.card-main') as HTMLDivElement;
@@ -145,8 +157,26 @@ function createCard(initial: MediaSessionInfo): Card {
   const timeCur = root.querySelector('.time-cur') as HTMLElement;
   const seek = root.querySelector('.seek') as HTMLInputElement;
   const timeDur = root.querySelector('.time-dur') as HTMLElement;
+  const playBtn = root.querySelector('.play') as HTMLButtonElement;
 
   main.addEventListener('click', () => send({ type: 'focus-tab', tabId: info.tabId }));
+  playBtn.addEventListener('click', () => command(info.key, { kind: 'toggle' }));
+  (root.querySelector('.seek-back') as HTMLButtonElement).addEventListener('click', () =>
+    command(info.key, { kind: 'seek-by', seconds: -SEEK_STEP_SECONDS }),
+  );
+  (root.querySelector('.seek-fwd') as HTMLButtonElement).addEventListener('click', () =>
+    command(info.key, { kind: 'seek-by', seconds: SEEK_STEP_SECONDS }),
+  );
+
+  let scrubbing = false;
+  seek.addEventListener('input', () => {
+    scrubbing = true;
+    timeCur.textContent = fmtTime(Number(seek.value));
+  });
+  seek.addEventListener('change', () => {
+    scrubbing = false;
+    command(info.key, { kind: 'seek-to', time: Number(seek.value) });
+  });
 
   const update = (cur: MediaSessionInfo): void => {
     info = cur;
@@ -171,10 +201,11 @@ function createCard(initial: MediaSessionInfo): Card {
     } else {
       seek.classList.remove('hidden');
       seek.max = String(el.duration);
-      seek.value = String(el.currentTime);
+      if (!scrubbing) seek.value = String(el.currentTime);
       timeDur.textContent = fmtTime(el.duration);
       timeDur.classList.remove('live');
     }
+    playBtn.innerHTML = el.playing ? ICON_PAUSE : ICON_PLAY;
   };
   update(info);
   return { root, update };

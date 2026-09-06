@@ -142,3 +142,47 @@ input[type='range'] {
   accent-color: #8ab4f8;
   height: 14px;
 }
+
+.controls-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.btn {
+  border: 1px solid #35353c;
+  background: #2a2a30;
+  color: #dcdce2;
+  border-radius: 7px;
+  padding: 4px 8px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.btn:hover {
+  background: #33333a;
+}
+
+.btn:active {
+  background: #3c3c44;
+}
+
+.btn.transport {
+  flex: none;
+}
+
+.btn.play {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 26px;
+  padding: 0;
+}
+
+.btn.play svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
