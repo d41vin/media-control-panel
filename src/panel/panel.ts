@@ -17,6 +17,7 @@ const ICON_MUTED =
 
 const sessions = new Map<string, MediaSessionInfo>();
 const cards = new Map<string, Card>();
+let pinnedKey: string | null = null;
 let port: chrome.runtime.Port | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -70,6 +71,9 @@ function onMessage(msg: PanelOutbound): void {
       break;
     }
     case 'pinned':
+      pinnedKey = msg.key;
+      for (const [key, card] of cards) card.root.classList.toggle('pinned', key === pinnedKey);
+      break;
     case 'pong':
       break;
   }
@@ -79,7 +83,12 @@ function onMessage(msg: PanelOutbound): void {
 
 const app = document.getElementById('app') as HTMLDivElement;
 app.innerHTML = `
-  <header class="header"><span class="header-title">Media</span></header>
+  <header class="header">
+    <span class="header-title">Media</span>
+    <span class="header-spacer"></span>
+    <button id="pause-all" class="btn subtle" title="Pause every media item">Pause all</button>
+    <button id="mute-all" class="btn subtle" title="Mute every media item">Mute all</button>
+  </header>
   <main id="list" class="list"></main>
   <div id="empty" class="empty">
     No media detected.<br />Play a video or audio in any tab and it will show up here.
@@ -98,6 +107,21 @@ app.innerHTML = `
 `;
 const listEl = document.getElementById('list') as HTMLElement;
 const emptyEl = document.getElementById('empty') as HTMLElement;
+const pauseAllBtn = document.getElementById('pause-all') as HTMLButtonElement;
+const muteAllBtn = document.getElementById('mute-all') as HTMLButtonElement;
+
+pauseAllBtn.addEventListener('click', () => send({ type: 'pause-all' }));
+muteAllBtn.addEventListener('click', () => {
+  const allMuted = sessions.size > 0 && [...sessions.values()].every((s) => s.element.muted);
+  send({ type: 'mute-all', muted: !allMuted });
+});
+
+function updateHeaderState(): void {
+  const allMuted = sessions.size > 0 && [...sessions.values()].every((s) => s.element.muted);
+  pauseAllBtn.disabled = sessions.size === 0;
+  muteAllBtn.disabled = sessions.size === 0;
+  muteAllBtn.textContent = allMuted ? 'Unmute all' : 'Mute all';
+}
 
 // --- global settings -----------------------------------------------------------------
 
@@ -147,6 +171,7 @@ function reconcile(): void {
     }
   }
   emptyEl.classList.toggle('hidden', sessions.size > 0);
+  updateHeaderState();
 }
 
 // --- utils -------------------------------------------------------------------------
@@ -187,6 +212,7 @@ function createCard(initial: MediaSessionInfo): Card {
         <span class="title"></span>
         <span class="subtitle"></span>
       </div>
+      <button class="btn pin" title="Send commands and shortcuts to this item">&#128204;</button>
     </div>
     <div class="progress-row">
       <span class="time time-cur"></span>
@@ -223,6 +249,10 @@ function createCard(initial: MediaSessionInfo): Card {
   const rateValue = root.querySelector('.rate-value') as HTMLElement;
 
   main.addEventListener('click', () => send({ type: 'focus-tab', tabId: info.tabId }));
+  (root.querySelector('.pin') as HTMLButtonElement).addEventListener('click', (e) => {
+    e.stopPropagation();
+    send({ type: 'pin', key: pinnedKey === info.key ? null : info.key });
+  });
   playBtn.addEventListener('click', () => command(info.key, { kind: 'toggle' }));
   (root.querySelector('.seek-back') as HTMLButtonElement).addEventListener('click', () =>
     command(info.key, { kind: 'seek-by', seconds: -SEEK_STEP_SECONDS }),

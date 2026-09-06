@@ -274,3 +274,41 @@ input[type='range'] {
   color: #77777f;
   font-size: 11px;
 }
+
+.header-spacer {
+  flex: 1;
+}
+
+.btn.subtle {
+  font-size: 12px;
+  padding: 3px 8px;
+}
+
+.btn.subtle:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.card.pinned {
+  border-color: #8ab4f8;
+  box-shadow: 0 0 0 1px #8ab4f8 inset;
+}
+
+.btn.pin {
+  flex: none;
+  margin-left: auto;
+  border: none;
+  background: none;
+  padding: 2px;
+  font-size: 12px;
+  opacity: 0.45;
+}
+
+.btn.pin:hover {
+  opacity: 0.8;
+  background: none;
+}
+
+.card.pinned .btn.pin {
+  opacity: 1;
+}
