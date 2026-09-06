@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Control every video and audio player across your tabs — play, pause, seek, volume and speed — from one lightweight side panel.",
   "minimum_chrome_version": "116",
-  "permissions": ["tabs", "storage"],
+  "permissions": ["tabs", "storage", "sidePanel"],
   "action": {
     "default_title": "Media Control Panel"
   },
