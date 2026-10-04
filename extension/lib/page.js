@@ -116,7 +116,14 @@ export function pageSeekTo({ time }) {
   })();
   const el = els.find((m) => !m.paused && !m.ended) || els[0];
   if (!el || el.duration === Infinity) return { acted: false };
-  el.currentTime = Math.min(Math.max(0, time), Number.isFinite(el.duration) ? el.duration : time);
+  // duration can be -1/NaN before metadata loads — seek unclamped rather
+  // than compute a negative currentTime (which throws)
+  const max = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : Infinity;
+  try {
+    el.currentTime = Math.min(Math.max(0, time), max);
+  } catch {
+    return { acted: false };
+  }
   return { acted: true };
 }
 
@@ -130,8 +137,12 @@ export function pageSeekBy({ seconds }) {
   })();
   const el = els.find((m) => !m.paused && !m.ended) || els[0];
   if (!el) return { acted: false };
-  const max = Number.isFinite(el.duration) ? el.duration : Infinity;
-  el.currentTime = Math.min(Math.max(0, el.currentTime + seconds), max);
+  const max = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : Infinity;
+  try {
+    el.currentTime = Math.min(Math.max(0, el.currentTime + seconds), max);
+  } catch {
+    return { acted: false };
+  }
   return { acted: true };
 }
 

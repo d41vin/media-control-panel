@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Media Control — background mock harness</title>
+  <style>
+    body { font: 13px/1.6 system-ui, sans-serif; max-width: 720px; margin: 24px auto; padding: 0 16px; }
+    button { font: 12px system-ui, sans-serif; padding: 4px 10px; margin: 2px; cursor: pointer; }
+    pre { background: #f4f4f4; padding: 12px; border: 1px solid #ddd; white-space: pre-wrap; }
+    .pass { color: #060; }
+    .fail { color: #c00; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>Background service worker — command harness</h1>
+  <p>Loads the real background.js against the mock and runs the command scenarios. Assertions run automatically on page load.</p>
+  <div id="out"></div>
+
+  <script type="module">
+    import { installMockChrome, faviconSvg } from './mock-chrome.js';
+
+    const out0 = document.getElementById('out');
+    window.addEventListener('error', (e) => {
+      const div = document.createElement('div');
+      div.className = 'fail';
+      div.textContent = 'PAGE ERROR: ' + e.message;
+      out0.append(div);
+    });
+    window.addEventListener('unhandledrejection', (e) => {
+      const div = document.createElement('div');
+      div.className = 'fail';
+      div.textContent = 'REJECTION: ' + String(e.reason && e.reason.stack ? e.reason.stack : e.reason);
+      out0.append(div);
+    });
+
+    const chrome = installMockChrome({ sessionSeed: { recent: [2, 3] } });
+    window.chrome = chrome;
+    const mock = chrome._mock;
+
+    // Unfocused tabs get their timers clamped to >=1s by Chromium, so fixed
+    // sleeps make asserts read mid-flight state. Poll for the condition
+    // (predicates may be async — await them).
+    const until = async (fn, ms = 5000) => {
+      const t0 = Date.now();
+      for (;;) {
+        if (await fn()) return true;
+        if (Date.now() - t0 > ms) return false;
+        await new Promise((r) => setTimeout(r, 60));
+      }
+    };
+
+    mock.addTab({
+      title: 'Video — YouTube',
+      url: 'https://www.youtube.com/watch?v=x',
+      favicon: faviconSvg('Y', '#f00'),
+      elements: [{ tag: 'VIDEO', playing: true, time: 10, duration: 100 }],
+    });
+    mock.addTab({
+      title: 'Song — muted, still playing',
+      url: 'https://open.spotify.com/track/1',
+      muted: true,
+      elements: [{ tag: 'AUDIO', playing: true, time: 5, duration: 200 }],
+    });
+    mock.addTab({
+      title: 'Paused Netflix (recent)',
+      url: 'https://www.netflix.com/watch/1',
+      elements: [{ tag: 'VIDEO', playing: false, time: 60, duration: 600 }],
+    });
+    mock.addTab({
+      title: 'Docs — no media',
+      url: 'https://docs.google.com/document/d/x',
+    });
+
+    await import('../extension/background.js');
+    mock.fireInstalled();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const out = document.getElementById('out');
+    const results = [];
+    const assert = (name, ok, detail) => results.push({ name, ok, detail });
+
+    // --- badge ---------------------------------------------------------------
+    // audible tabs: only tab 1 (tab 2 is muted)
+    await new Promise((r) => setTimeout(r, 50));
+    assert('badge counts audible tabs', mock.badgeText() === '1', `badge="${mock.badgeText()}"`);
+
+    // --- pause-all reaches muted-but-playing and recent (paused) tabs --------
+    mock.fireCommand('pause-all');
+    await until(() => mock.tabs.get(1)._elements[0].paused && mock.tabs.get(2)._elements[0].paused);
+    assert('pause-all paused audible tab 1', mock.tabs.get(1)._elements[0].paused === true,
+      `paused=${mock.tabs.get(1)._elements[0].paused}`);
+    assert('pause-all paused muted tab 2 (via recent)', mock.tabs.get(2)._elements[0].paused === true,
+      `paused=${mock.tabs.get(2)._elements[0].paused}`);
+    assert('pause-all hit recent paused tab 3 (no-op safe)', mock.tabs.get(3)._elements[0].paused === true,
+      `paused=${mock.tabs.get(3)._elements[0].paused}`);
+
+    // --- mute-all toggle ------------------------------------------------------
+    mock.fireUpdated(1, { audible: true }); // user resumed playback
+    mock.tabs.get(1)._elements[0].paused = false;
+    mock.tabs.get(2)._elements[0].paused = false;
+    mock.tabs.get(3)._elements[0].paused = false;
+    await until(() => mock.badgeText() === '1');
+
+    mock.fireCommand('mute-all');
+    await until(() => mock.tabs.get(1).mutedInfo.muted === true);
+    assert('mute-all muted audible tab 1', mock.tabs.get(1).mutedInfo.muted === true,
+      `muted=${mock.tabs.get(1).mutedInfo.muted}`);
+    await until(() => mock.badgeText() === '');
+    assert('badge drops to 0 after mute-all', mock.badgeText() === '', `badge="${mock.badgeText()}"`);
+
+    mock.fireCommand('mute-all'); // everything audible is muted -> unmute extension-muted
+    await until(() => mock.tabs.get(1).mutedInfo.muted === false);
+    assert('second mute-all unmutes extension-muted tabs', mock.tabs.get(1).mutedInfo.muted === false,
+      `muted=${mock.tabs.get(1).mutedInfo.muted}`);
+
+    // --- toggle-target ---------------------------------------------------------
+    mock.tabs.get(3)._elements[0].paused = true; // deterministic start
+    await chrome.storage.session.set({ target: 3 });
+    mock.fireCommand('toggle-target');
+    await until(() => mock.tabs.get(3)._elements[0].paused === false);
+    assert('toggle-target played the pinned paused tab', mock.tabs.get(3)._elements[0].paused === false,
+      `paused=${mock.tabs.get(3)._elements[0].paused}`);
+
+    mock.fireCommand('toggle-target');
+    await until(() => mock.tabs.get(3)._elements[0].paused === true);
+    assert('second toggle-target paused it again', mock.tabs.get(3)._elements[0].paused === true,
+      `paused=${mock.tabs.get(3)._elements[0].paused}`);
+
+    // dead pin is cleaned up
+    await chrome.storage.session.set({ target: 999 });
+    mock.fireCommand('toggle-target');
+    await until(async () => (await chrome.storage.session.get('target')).target === undefined);
+    const stored = await chrome.storage.session.get('target');
+    assert('dead target pin is removed', stored.target === undefined, `target=${stored.target}`);
+
+    // --- onRemoved prunes recent -------------------------------------------------
+    await chrome.storage.session.set({ recent: [3, 99] });
+    await chrome.tabs.remove(3);
+    await new Promise((r) => setTimeout(r, 100));
+    const recent = (await chrome.storage.session.get('recent')).recent;
+    assert('onRemoved prunes recent list', JSON.stringify(recent) === '[99]', `recent=${JSON.stringify(recent)}`);
+
+    // --- report ------------------------------------------------------------------
+    for (const { name, ok, detail } of results) {
+      const div = document.createElement('div');
+      div.className = ok ? 'pass' : 'fail';
+      div.textContent = `${ok ? 'PASS' : 'FAIL'}  ${name}${ok ? '' : '  — ' + detail}`;
+      out.append(div);
+    }
+    const summary = document.createElement('pre');
+    const failed = results.filter((r) => !r.ok).length;
+    summary.textContent = `${results.length - failed}/${results.length} assertions passed`;
+    out.prepend(summary);
+    document.title = failed ? `FAILED (${failed}) — background harness` : `PASS (${results.length}) — background harness`;
+  </script>
+</body>
+</html>

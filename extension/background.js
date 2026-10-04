@@ -80,11 +80,20 @@ chrome.commands.onCommand.addListener((command) => {
 
 async function handleCommand(command) {
   if (command === 'pause-all') {
-    const audible = await chrome.tabs.query({ audible: true });
-    for (const tab of audible) {
-      if (tab.id === undefined) continue;
+    // every tab that could be playing: sounding now, or media tabs from this
+    // session (muted playback isn't audible but still needs pausing);
+    // pagePause no-ops on tabs with nothing playing
+    const [audible, stored] = await Promise.all([
+      chrome.tabs.query({ audible: true }),
+      chrome.storage.session.get('recent').catch(() => ({})),
+    ]);
+    const ids = new Set(audible.map((t) => t.id).filter((id) => id !== undefined));
+    if (Array.isArray(stored.recent)) {
+      for (const id of stored.recent) if (typeof id === 'number') ids.add(id);
+    }
+    for (const tabId of ids) {
       chrome.scripting
-        .executeScript({ target: { tabId: tab.id, allFrames: true }, func: pagePause })
+        .executeScript({ target: { tabId, allFrames: true }, func: pagePause })
         .catch(() => {});
     }
     return;

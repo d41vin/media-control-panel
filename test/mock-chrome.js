@@ -103,12 +103,46 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
     for (const fn of onUpdated) fn(tabId, info);
   };
 
+  const commandHandlers = [];
+  const onInstalledHandlers = [];
+
   const chrome = {
-    runtime: { lastError: null },
+    action: {
+      _calls: [],
+      async setBadgeText(details) {
+        this._calls.push({ fn: 'setBadgeText', ...details });
+      },
+      async setBadgeBackgroundColor(details) {
+        this._calls.push({ fn: 'setBadgeBackgroundColor', ...details });
+      },
+      async setBadgeTextColor(details) {
+        this._calls.push({ fn: 'setBadgeTextColor', ...details });
+      },
+    },
+
+    commands: {
+      onCommand: {
+        addListener(fn) {
+          commandHandlers.push(fn);
+        },
+      },
+    },
+
+    runtime: {
+      lastError: null,
+      onInstalled: {
+        addListener(fn) {
+          onInstalledHandlers.push(fn);
+        },
+      },
+    },
 
     tabs: {
-      async query() {
-        return [...tabs.values()].map((t) => ({ ...t }));
+      async query(filter = {}) {
+        return [...tabs.values()]
+          .filter((t) => filter.audible === undefined || t.audible === filter.audible)
+          .filter((t) => filter.muted === undefined || !!t.mutedInfo?.muted === filter.muted)
+          .map((t) => ({ ...t }));
       },
       async get(id) {
         const t = tabs.get(id);
@@ -200,6 +234,16 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
       tabs,
       addTab,
       fireUpdated,
+      fireCommand(command) {
+        for (const fn of commandHandlers) fn(command);
+      },
+      fireInstalled() {
+        for (const fn of onInstalledHandlers) fn();
+      },
+      badgeText() {
+        const calls = chrome.action._calls.filter((c) => c.fn === 'setBadgeText');
+        return calls.length ? calls[calls.length - 1].text : null;
+      },
       /** Simulate a play/pause on a tab's primary element. */
       toggle(id) {
         const t = tabs.get(id);

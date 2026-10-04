@@ -566,7 +566,6 @@ function updateRow(rec) {
     nodes.fav.hidden = true;
     nodes.fav.removeAttribute('src');
     nodes.favLetter.hidden = false;
-    nodes.favLetter.textContent = (host || titleText || '?').charAt(0).toUpperCase();
   }
 
   if (!nodes.li.parentNode) listEl.append(nodes.li);
@@ -670,10 +669,13 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
   if (!rec) {
     if (info.audible === true) {
       // media started in a tab that was silent when the popup opened
-      void chrome.tabs.get(tabId).then((tab) => {
-        if (chrome.runtime.lastError || !tab || rows.has(tabId)) return;
-        void adoptTab(tab);
-      });
+      void chrome.tabs
+        .get(tabId)
+        .then((tab) => {
+          if (!tab || rows.has(tabId)) return;
+          void adoptTab(tab);
+        })
+        .catch(() => {}); // tab closed before we could look
     }
     return;
   }
@@ -703,7 +705,7 @@ async function adoptTab(tab) {
 
 function buildHints() {
   if (/Mac/.test(navigator.userAgent)) {
-    hintsEl.textContent = '⇧⌘P Pause all · ⇧⌘M Mute all';
+    hintsEl.textContent = '⌥⇧P Pause all · ⌥⇧M Mute all';
     return;
   }
   hintsEl.replaceChildren(
