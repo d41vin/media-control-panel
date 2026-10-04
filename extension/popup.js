@@ -3,7 +3,16 @@
 // audible/mutedInfo come free with tabs.query, titles come from host
 // permissions, and control is on-demand executeScript (lib/page.js).
 
-import { pageProbe, pageToggle } from './lib/page.js';
+import {
+  pageProbe,
+  pageToggle,
+  pagePing,
+  pageSeekTo,
+  pageSeekBy,
+  pageSetVolume,
+  pageSetRate,
+  pagePiP,
+} from './lib/page.js';
 
 const listEl = document.getElementById('list');
 const emptyEl = document.getElementById('empty');
@@ -20,6 +29,7 @@ const ICONS = {
   pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>',
   speaker: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3z"/><path d="M16.5 7.5a6 6 0 0 1 0 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
   speakerX: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3z"/><path d="M16 9l5 6m0-6l-5 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>',
 };
 
 function icon(name) {
@@ -103,12 +113,23 @@ function makeRow(tab) {
   muteBtn.type = 'button';
   muteBtn.title = 'Mute / unmute tab';
 
-  controls.append(eq, playBtn, muteBtn);
+  const chevBtn = el('button', 'icon-btn secondary chev');
+  chevBtn.type = 'button';
+  chevBtn.title = 'Details';
+  chevBtn.setAttribute('aria-expanded', 'false');
+
+  controls.append(eq, playBtn, muteBtn, chevBtn);
   main.append(idx, fav, stack, controls);
-  li.append(main);
+
+  stack.addEventListener('click', () => void activateTab(rows.get(tab.id)));
+  stack.style.cursor = 'pointer';
+
+  const panel = buildPanel();
+  li.append(main, panel);
 
   playBtn.addEventListener('click', () => void togglePlay(rows.get(tab.id)));
   muteBtn.addEventListener('click', () => void muteTab(rows.get(tab.id)));
+  chevBtn.addEventListener('click', () => void toggleExpand(rows.get(tab.id)));
 
   listEl.append(li);
   const rec = {
@@ -116,19 +137,310 @@ function makeRow(tab) {
     probe: null,
     expanded: false,
     playing: !!tab.audible,
-    nodes: { li, idx, fav, title, site, eq, playBtn, muteBtn },
+    nodes: {
+      li,
+      idx,
+      fav,
+      title,
+      site,
+      eq,
+      playBtn,
+      muteBtn,
+      chevBtn,
+      panel,
+      pos: panel.querySelector('.pos'),
+      posReadout: panel.querySelector('.pos-readout'),
+      vol: panel.querySelector('.vol'),
+      volReadout: panel.querySelector('.vol-readout'),
+      rate: panel.querySelector('.rate'),
+      rateReadout: panel.querySelector('.rate-readout'),
+      pipBtn: panel.querySelector('.pip'),
+      back10: panel.querySelector('.back10'),
+      fwd10: panel.querySelector('.fwd10'),
+      tabBtn: panel.querySelector('.tab'),
+      closeBtn: panel.querySelector('.close'),
+    },
     ping: null,
     dragging: false,
+    volTimer: undefined,
+    pendingVolume: null,
   };
   rows.set(tab.id, rec);
+  wirePanel(rec);
   updateRow(rec);
   return rec;
+}
+
+/** Static panel skeleton; values are filled by syncPanel(). */
+function buildPanel() {
+  const panel = el('div', 'row-panel');
+
+  const posRow = el('div', 'panel-row');
+  posRow.append(el('span', 'panel-label', 'Position'));
+  const pos = el('input', 'pos');
+  pos.type = 'range';
+  pos.min = '0';
+  pos.max = '100';
+  pos.step = '1';
+  pos.setAttribute('aria-label', 'Seek');
+  const liveTag = el('span', 'live-tag', 'Live');
+  const posReadout = el('span', 'panel-readout pos-readout');
+  posRow.append(pos, posReadout, liveTag);
+
+  const volRow = el('div', 'panel-row');
+  volRow.append(el('span', 'panel-label', 'Volume'));
+  const vol = el('input', 'vol');
+  vol.type = 'range';
+  vol.min = '0';
+  vol.max = '1';
+  vol.step = '0.01';
+  vol.setAttribute('aria-label', 'Volume');
+  const volReadout = el('span', 'panel-readout vol-readout');
+  volRow.append(vol, volReadout);
+
+  const rateRow = el('div', 'panel-row');
+  rateRow.append(el('span', 'panel-label', 'Speed'));
+  const rate = el('input', 'rate');
+  rate.type = 'range';
+  rate.min = '0.25';
+  rate.max = '4';
+  rate.step = '0.05';
+  rate.setAttribute('aria-label', 'Playback speed');
+  const rateReadout = el('span', 'panel-readout rate-readout');
+  rateRow.append(rate, rateReadout);
+
+  const actions = el('div', 'panel-actions');
+  const back10 = el('button', 'text-btn back10');
+  back10.type = 'button';
+  back10.textContent = '−10s';
+  const fwd10 = el('button', 'text-btn fwd10');
+  fwd10.type = 'button';
+  fwd10.textContent = '+10s';
+  const pip = el('button', 'text-btn pip');
+  pip.type = 'button';
+  pip.textContent = 'PiP';
+  const tabBtn = el('button', 'text-btn tab');
+  tabBtn.type = 'button';
+  tabBtn.textContent = 'Tab';
+  const closeBtn = el('button', 'text-btn danger close');
+  closeBtn.type = 'button';
+  closeBtn.textContent = 'Close';
+  actions.append(back10, fwd10, pip, tabBtn, closeBtn);
+
+  panel.append(posRow, volRow, rateRow, actions);
+  return panel;
+}
+
+// --- expanded panel -----------------------------------------------------------------
+
+function setFill(input) {
+  const min = parseFloat(input.min) || 0;
+  const max = parseFloat(input.max) || 1;
+  const v = parseFloat(input.value) || 0;
+  input.style.setProperty('--p', `${((v - min) / (max - min)) * 100}%`);
+}
+
+function toggleExpand(rec) {
+  if (!rec) return;
+  rec.expanded = !rec.expanded;
+  rec.nodes.li.classList.toggle('expanded', rec.expanded);
+  rec.nodes.chevBtn.setAttribute('aria-expanded', String(rec.expanded));
+  if (rec.expanded) {
+    syncPanel(rec, true);
+    if (rec.playing) startPing(rec);
+  } else {
+    stopPing(rec);
+  }
+}
+
+/** Fill panel values from probe, or fresh from the page (pingNow). */
+function syncPanel(rec, fresh) {
+  const n = rec.nodes;
+  const disabled = !rec.probe;
+  n.pos.disabled = n.vol.disabled = n.rate.disabled = disabled;
+  n.pipBtn.disabled = disabled;
+  n.back10.disabled = n.fwd10.disabled = disabled;
+
+  if (!rec.probe) {
+    n.posReadout.textContent = '—';
+    n.volReadout.textContent = '—';
+    n.rateReadout.textContent = '—';
+    return;
+  }
+  if (fresh) {
+    // panel just opened: take a real reading instead of the probe snapshot
+    void pingNow(rec);
+    return;
+  }
+
+  const element = primaryOfProbe(rec.probe)?.element;
+  if (!element) return;
+  const live = element.duration === -1;
+  n.pos.closest('.panel-row').classList.toggle('live', live);
+  if (!live) {
+    n.pos.max = String(Math.floor(element.duration));
+    n.pos.value = String(Math.floor(element.currentTime));
+    setFill(n.pos);
+    n.posReadout.textContent = `${fmtTime(element.currentTime)} / ${fmtTime(element.duration)}`;
+  }
+  n.vol.value = String(element.volume);
+  setFill(n.vol);
+  n.volReadout.textContent = `${Math.round(element.volume * 100)}%`;
+  n.rate.value = String(element.rate);
+  setFill(n.rate);
+  n.rateReadout.textContent = `${element.rate.toFixed(2)}×`;
+}
+
+/** One cheap pagePing on the primary frame; refreshes panel readouts. */
+async function pingNow(rec) {
+  if (!rec?.probe) return null;
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: rec.tab.id, frameId: rec.probe.primaryFrameId },
+      func: pagePing,
+    });
+    const state = results[0]?.result;
+    if (!state?.present) return null;
+    if (!rec.dragging) {
+      const n = rec.nodes;
+      const live = !(Number.isFinite(state.duration) && state.duration >= 0);
+      n.pos.closest('.panel-row').classList.toggle('live', live);
+      if (!live) {
+        n.pos.max = String(Math.floor(state.duration));
+        n.pos.value = String(Math.floor(state.currentTime));
+        setFill(n.pos);
+        n.posReadout.textContent = `${fmtTime(state.currentTime)} / ${fmtTime(state.duration)}`;
+      }
+      n.vol.value = String(state.volume);
+      setFill(n.vol);
+      n.volReadout.textContent = `${Math.round(state.volume * 100)}%`;
+      n.rate.value = String(state.rate);
+      setFill(n.rate);
+      n.rateReadout.textContent = `${state.rate.toFixed(2)}×`;
+      n.pipBtn.classList.toggle('on', !!state.pip);
+    }
+    return state;
+  } catch {
+    return null;
+  }
+}
+
+function startPing(rec) {
+  if (rec.ping) return;
+  rec.ping = setInterval(() => {
+    void pingNow(rec);
+  }, 1000);
+}
+
+function stopPing(rec) {
+  if (rec.ping) {
+    clearInterval(rec.ping);
+    rec.ping = null;
+  }
+  if (rec.expanded && rec.probe) void pingNow(rec); // one last sync after pause
+}
+
+/** Wire panel events once, at row creation. */
+function wirePanel(rec) {
+  const n = rec.nodes;
+
+  // While any slider is held, the ping loop must not fight the user's hand.
+  const dragGuard = (input) => {
+    input.addEventListener('input', () => {
+      rec.dragging = true;
+    });
+    for (const ev of ['change', 'pointerup', 'pointercancel', 'blur']) {
+      input.addEventListener(ev, () => {
+        rec.dragging = false;
+      });
+    }
+  };
+  dragGuard(n.pos);
+  dragGuard(n.vol);
+  dragGuard(n.rate);
+
+  n.pos.addEventListener('input', () => {
+    setFill(n.pos);
+    n.posReadout.textContent = `${fmtTime(parseFloat(n.pos.value))} / ${fmtTime(parseFloat(n.pos.max))}`;
+  });
+  n.pos.addEventListener('change', () => {
+    void exec(rec, pageSeekTo, { time: parseFloat(n.pos.value) });
+  });
+
+  n.vol.addEventListener('input', () => {
+    setFill(n.vol);
+    n.volReadout.textContent = `${Math.round(parseFloat(n.vol.value) * 100)}%`;
+    rec.pendingVolume = parseFloat(n.vol.value);
+    if (rec.volTimer === undefined) {
+      rec.volTimer = setTimeout(() => {
+        rec.volTimer = undefined;
+        if (rec.pendingVolume !== null) {
+          void exec(rec, pageSetVolume, { volume: rec.pendingVolume });
+          rec.pendingVolume = null;
+        }
+      }, 80);
+    }
+  });
+
+  n.rate.addEventListener('input', () => {
+    setFill(n.rate);
+    n.rateReadout.textContent = `${parseFloat(n.rate.value).toFixed(2)}×`;
+  });
+  n.rate.addEventListener('change', () => {
+    void exec(rec, pageSetRate, { rate: parseFloat(n.rate.value) });
+  });
+
+  n.back10.addEventListener('click', () => {
+    void exec(rec, pageSeekBy, { seconds: -10 });
+    setTimeout(() => void pingNow(rec), 120);
+  });
+  n.fwd10.addEventListener('click', () => {
+    void exec(rec, pageSeekBy, { seconds: 10 });
+    setTimeout(() => void pingNow(rec), 120);
+  });
+  n.pipBtn.addEventListener('click', () => {
+    void exec(rec, pagePiP, {});
+    setTimeout(() => void pingNow(rec), 250);
+  });
+  n.tabBtn.addEventListener('click', () => void activateTab(rec));
+  n.closeBtn.addEventListener('click', () => void chrome.tabs.remove(rec.tab.id).catch(() => {}));
+}
+
+/** executeScript helper targeting the primary frame. */
+async function exec(rec, func, args) {
+  if (!rec?.probe) return null;
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: rec.tab.id, frameId: rec.probe.primaryFrameId },
+      func,
+      args: [args],
+    });
+    return results[0]?.result ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function activateTab(rec) {
+  if (!rec) return;
+  try {
+    await chrome.tabs.update(rec.tab.id, { active: true });
+    if (rec.tab.windowId !== undefined) {
+      await chrome.windows.update(rec.tab.windowId, { focused: true });
+    }
+  } catch {
+    // tab or window may be gone
+  }
 }
 
 function removeRow(tabId) {
   const rec = rows.get(tabId);
   if (!rec) return;
   stopPing(rec);
+  if (rec.volTimer !== undefined) {
+    clearTimeout(rec.volTimer);
+    rec.volTimer = undefined;
+  }
   rec.nodes.li.remove();
   rows.delete(tabId);
   if (pinnedTabId === tabId) {
@@ -180,10 +492,15 @@ function updateRow(rec) {
   }
 
   if (!nodes.li.parentNode) listEl.append(nodes.li);
+
+  // ping loop follows expansion + playing state; stopPing syncs once on pause
+  if (rec.expanded && rec.playing && !rec.ping) startPing(rec);
+  if (rec.ping && (!rec.expanded || !rec.playing)) stopPing(rec);
+  if (rec.expanded) syncPanel(rec, false);
 }
 
 /** Order: pinned target, playing, then the rest; stable within groups. */
-async function reorder() {
+function reorder() {
   const order = [...rows.values()].sort((a, b) => {
     const rank = (r) => (r.tab.id === pinnedTabId ? 0 : r.playing ? 1 : 2);
     return rank(a) - rank(b) || a.tab.index - b.tab.index || a.tab.id - b.tab.id;

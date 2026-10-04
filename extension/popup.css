@@ -170,6 +170,10 @@ button {
   object-fit: cover;
 }
 
+.fav[hidden] {
+  display: none;
+}
+
 .fav-letter {
   grid-area: fav;
   width: 16px;
@@ -275,6 +279,10 @@ button {
   margin-right: 4px;
 }
 
+.eq[hidden] {
+  display: none;
+}
+
 .eq i {
   width: 2px;
   background: currentColor;
@@ -305,7 +313,7 @@ button {
 
 .panel-row {
   display: grid;
-  grid-template-columns: 56px 1fr 52px;
+  grid-template-columns: 56px 1fr auto;
   align-items: center;
   gap: 10px;
   min-height: 24px;
@@ -378,10 +386,6 @@ input[type='range']:disabled {
   cursor: default;
 }
 
-input[type='range'].live {
-  display: none;
-}
-
 .live-tag {
   display: none;
   font-size: 10px;
@@ -394,7 +398,8 @@ input[type='range'].live {
   display: block;
 }
 
-.live input[type='range'] {
+.live input[type='range'],
+.live .pos-readout {
   display: none;
 }
 
