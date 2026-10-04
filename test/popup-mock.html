@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Media Control — popup mock harness</title>
+  <link rel="stylesheet" href="../extension/popup.css" />
+  <style>
+    /* The real popup.css styles body as the 380px popup; in the harness the
+       popup lives in a frame next to the fake-browser controls. */
+    body {
+      width: auto;
+      max-height: none;
+      display: flex;
+      flex-direction: row;
+      gap: 24px;
+      padding: 24px;
+      background: #7a7a7a;
+    }
+    .popup-frame {
+      width: 380px;
+      max-height: 560px;
+      display: flex;
+      flex-direction: column;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: 'Helvetica Neue', Helvetica, Arial, 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px;
+      line-height: 1.35;
+      outline: 1px solid #000;
+    }
+    .popup-frame.light {
+      --paper: #ffffff;
+      --ink: #111111;
+      --muted: #6f6f6f;
+      --faint: #b5b5b5;
+      --hairline: #e4e4e4;
+      --hover: #f4f4f4;
+      --accent: #e30613;
+    }
+    .controls {
+      font: 13px/1.6 system-ui, sans-serif;
+      color: #fff;
+      max-width: 420px;
+    }
+    .controls h2 { font-size: 14px; margin: 0 0 8px; }
+    .controls .tab-ctl {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .controls button {
+      font: 11px system-ui, sans-serif;
+      padding: 3px 8px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <!-- The popup markup below mirrors extension/popup.html exactly. -->
+  <div class="popup-frame" id="popup-frame">
+    <header class="header">
+      <h1 class="wordmark">Media Control<span id="count" class="count" hidden></span></h1>
+      <div class="header-actions">
+        <button id="pause-all" class="text-btn" type="button" title="Pause media in every tab">Pause all</button>
+        <button id="mute-all" class="text-btn" type="button" title="Mute or unmute every listed tab">Mute all</button>
+      </div>
+    </header>
+
+    <ul id="list" class="list" aria-label="Tabs playing media"></ul>
+
+    <div id="empty" class="empty">
+      <div class="empty-zero" aria-hidden="true">0</div>
+      <p class="empty-label">Nothing playing</p>
+      <p class="empty-hint">Start a video or song in any tab&nbsp;&mdash; it appears here.</p>
+    </div>
+
+    <footer class="footer">
+      <span id="hints" class="footer-hints"></span>
+      <span id="target-readout" class="footer-target"></span>
+    </footer>
+  </div>
+
+  <div class="controls">
+    <h2>Fake browser</h2>
+    <p>Buttons mutate the mock and fire the real tabs events.</p>
+    <div id="tab-controls"></div>
+    <button id="new-media">+ new tab starts playing</button>
+    <button id="tick-once">advance 1s</button>
+    <button id="dark">toggle dark</button>
+  </div>
+
+  <!-- Deferred modules run in document order: this installer runs before popup.js. -->
+  <script type="module">
+    import { installMockChrome, faviconSvg } from './mock-chrome.js';
+
+    const chrome = installMockChrome({ sessionSeed: { recent: [3] } });
+    const mock = chrome._mock;
+
+    mock.addTab({
+      title: 'Big Buck Bunny — YouTube',
+      url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ',
+      favicon: faviconSvg('Y', '#f00'),
+      elements: [{ tag: 'VIDEO', playing: true, time: 83, duration: 596, volume: 0.8 }],
+    });
+    mock.addTab({
+      title: 'Big Buck Bunny (muted tab) — YouTube',
+      url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ&t=1',
+      favicon: faviconSvg('Y', '#c00'),
+      muted: true,
+      elements: [{ tag: 'VIDEO', playing: true, time: 40, duration: 596, muted: true }],
+    });
+    mock.addTab({
+      title: 'Some Series: S01E01 — Netflix',
+      url: 'https://www.netflix.com/watch/81234567',
+      elements: [{ tag: 'VIDEO', playing: false, time: 1200, duration: 3600 }],
+    });
+    mock.addTab({
+      title: 'Muted tab without media — will be dropped',
+      url: 'https://news.example.com/article',
+      muted: true,
+    });
+    mock.addTab({
+      title: 'System media player',
+      url: 'chrome://media-app',
+      injectable: false,
+      elements: [{ tag: 'AUDIO', playing: true, time: 5, duration: -1 }],
+    });
+
+    // harness controls ---------------------------------------------------------
+    const controls = document.getElementById('tab-controls');
+    function renderControls() {
+      controls.replaceChildren();
+      for (const tab of mock.tabs.values()) {
+        const row = document.createElement('div');
+        row.className = 'tab-ctl';
+        const name = document.createElement('span');
+        name.textContent = `${tab.id}. ${tab.title.slice(0, 34)}`;
+        const toggle = document.createElement('button');
+        toggle.textContent = '▶/⏸';
+        toggle.onclick = () => mock.toggle(tab.id);
+        const mute = document.createElement('button');
+        mute.textContent = 'mute';
+        mute.onclick = () => mock.mute(tab.id);
+        const close = document.createElement('button');
+        close.textContent = '✕';
+        close.onclick = () => chrome.tabs.remove(tab.id).catch(() => {});
+        row.append(name, toggle, mute, close);
+        controls.append(row);
+      }
+    }
+    renderControls();
+
+    document.getElementById('new-media').onclick = () => {
+      mock.addTab({
+        title: `Fresh video ${Date.now() % 1000} — Vimeo`,
+        url: 'https://vimeo.com/1234567',
+        elements: [{ tag: 'VIDEO', playing: true, time: 0, duration: 300 }],
+      });
+      renderControls();
+      const id = Math.max(...mock.tabs.keys());
+      // the popup learns about it via the audible event, like real Chrome
+      mock.fireUpdated(id, { audible: true });
+    };
+    document.getElementById('tick-once').onclick = () => mock.tick();
+    document.getElementById('dark').onclick = () =>
+      document.getElementById('popup-frame').classList.toggle('light');
+    setInterval(() => mock.tick(), 1000);
+  </script>
+
+  <script type="module" src="../extension/popup.js"></script>
+</body>
+</html>
