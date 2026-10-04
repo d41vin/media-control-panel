@@ -8,6 +8,10 @@ no framework, no build step, no webfonts, nothing to compile.
 Everything is local: no accounts, no analytics, no network requests. The only state is the pinned
 target and the recently-playing list in `chrome.storage.session` (cleared when the browser closes).
 
+| Light | Dark |
+|---|---|
+| ![Light theme with an expanded panel](docs/screenshots/popup-light.png) | ![Dark theme media list](docs/screenshots/popup-dark.png) |
+
 ## Features (v2.0)
 
 - **One row per media tab** — sounding tabs, muted tabs, and recently-playing tabs show up with
