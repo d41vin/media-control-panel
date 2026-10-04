@@ -117,6 +117,10 @@ button {
   cursor: default;
 }
 
+.text-btn.on {
+  color: var(--accent);
+}
+
 .text-btn.danger:hover:not(:disabled) {
   color: var(--accent);
 }

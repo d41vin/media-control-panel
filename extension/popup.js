@@ -6,6 +6,7 @@
 import {
   pageProbe,
   pageToggle,
+  pagePause,
   pagePing,
   pageSeekTo,
   pageSeekBy,
@@ -158,6 +159,7 @@ function makeRow(tab) {
       back10: panel.querySelector('.back10'),
       fwd10: panel.querySelector('.fwd10'),
       tabBtn: panel.querySelector('.tab'),
+      pinBtn: panel.querySelector('.pin'),
       closeBtn: panel.querySelector('.close'),
     },
     ping: null,
@@ -222,10 +224,13 @@ function buildPanel() {
   const tabBtn = el('button', 'text-btn tab');
   tabBtn.type = 'button';
   tabBtn.textContent = 'Tab';
+  const pinBtn = el('button', 'text-btn pin');
+  pinBtn.type = 'button';
+  pinBtn.textContent = 'Pin';
   const closeBtn = el('button', 'text-btn danger close');
   closeBtn.type = 'button';
   closeBtn.textContent = 'Close';
-  actions.append(back10, fwd10, pip, tabBtn, closeBtn);
+  actions.append(back10, fwd10, pip, tabBtn, pinBtn, closeBtn);
 
   panel.append(posRow, volRow, rateRow, actions);
   return panel;
@@ -260,6 +265,7 @@ function syncPanel(rec, fresh) {
   n.pos.disabled = n.vol.disabled = n.rate.disabled = disabled;
   n.pipBtn.disabled = disabled;
   n.back10.disabled = n.fwd10.disabled = disabled;
+  // pin / tab / close work regardless of media state
 
   if (!rec.probe) {
     n.posReadout.textContent = '—';
@@ -403,7 +409,59 @@ function wirePanel(rec) {
     setTimeout(() => void pingNow(rec), 250);
   });
   n.tabBtn.addEventListener('click', () => void activateTab(rec));
+  n.pinBtn.addEventListener('click', () => void togglePin(rec));
   n.closeBtn.addEventListener('click', () => void chrome.tabs.remove(rec.tab.id).catch(() => {}));
+}
+
+// --- global actions and pinned target ------------------------------------------------
+
+async function pauseAll() {
+  const jobs = [...rows.values()].filter((r) => r.playing).map(async (rec) => {
+    rec.playing = false;
+    updateRow(rec);
+    try {
+      const target = rec.probe
+        ? { tabId: rec.tab.id, frameId: rec.probe.primaryFrameId }
+        : { tabId: rec.tab.id, allFrames: true };
+      await chrome.scripting.executeScript({ target, func: pagePause });
+    } catch {
+      // tab gone; onRemoved cleans up
+    }
+  });
+  await Promise.allSettled(jobs);
+  refreshChrome();
+  void reorder();
+}
+
+async function muteAll() {
+  const allMuted = rows.size > 0 && [...rows.values()].every((r) => r.tab.mutedInfo?.muted);
+  const target = !allMuted;
+  await Promise.allSettled(
+    [...rows.values()]
+      .filter((r) => !!r.tab.mutedInfo?.muted !== target)
+      .map((r) => chrome.tabs.update(r.tab.id, { muted: target }).catch(() => {})),
+  );
+  // rows re-render from the mutedInfo events
+}
+
+async function togglePin(rec) {
+  if (!rec) return;
+  pinnedTabId = pinnedTabId === rec.tab.id ? null : rec.tab.id;
+  try {
+    if (pinnedTabId === null) await chrome.storage.session.remove('target');
+    else await chrome.storage.session.set({ target: pinnedTabId });
+  } catch {
+    // storage unavailable; pin still works for this popup session
+  }
+  for (const r of rows.values()) updateRow(r);
+  void reorder();
+  updateTargetReadout();
+}
+
+function updateTargetReadout() {
+  const rec = pinnedTabId !== null ? rows.get(pinnedTabId) : null;
+  targetEl.textContent = rec ? `Target ${rec.nodes.idx.textContent} · ${hostOf(rec.tab.url) || 'system page'}` : 'Target none';
+  targetEl.classList.toggle('set', !!rec);
 }
 
 /** executeScript helper targeting the primary frame. */
@@ -477,6 +535,8 @@ function updateRow(rec) {
 
   nodes.li.classList.toggle('paused', !rec.playing);
   nodes.li.classList.toggle('target', tab.id === pinnedTabId);
+  nodes.pinBtn.textContent = tab.id === pinnedTabId ? 'Unpin' : 'Pin';
+  nodes.pinBtn.classList.toggle('on', tab.id === pinnedTabId);
 
   // favicon: real one when http(s), letter tile otherwise
   const favUrl = tab.favIconUrl;
@@ -624,11 +684,27 @@ function buildHints() {
 
 async function init() {
   buildHints();
+  pauseAllBtn.addEventListener('click', () => void pauseAll());
+  muteAllBtn.addEventListener('click', () => void muteAll());
   const [tabs, stored] = await Promise.all([
     chrome.tabs.query({}),
     chrome.storage.session.get('target').catch(() => ({})),
   ]);
   pinnedTabId = typeof stored.target === 'number' ? stored.target : null;
+
+  // keep the pin in sync if it is cleared elsewhere (e.g. tab closed by the
+  // background while the popup is open)
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'session' || !('target' in changes)) return;
+    const v = changes.target.newValue;
+    const next = typeof v === 'number' ? v : null;
+    if (next !== pinnedTabId) {
+      pinnedTabId = next;
+      for (const r of rows.values()) updateRow(r);
+      void reorder();
+    }
+    updateTargetReadout();
+  });
 
   const candidates = tabs.filter(
     (t) => t.audible || (t.mutedInfo?.muted && /^https?:/.test(t.url ?? '')),
@@ -636,6 +712,7 @@ async function init() {
   for (const tab of candidates) makeRow(tab);
   void reorder();
   refreshChrome();
+  updateTargetReadout();
 
   // Probe candidates in parallel; enrich rows as each lands. Muted tabs that
   // turn out to hold no media quietly leave the list.
