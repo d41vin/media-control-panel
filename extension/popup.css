@@ -191,6 +191,10 @@ button {
   text-transform: uppercase;
 }
 
+.fav-letter[hidden] {
+  display: none;
+}
+
 .t-stack {
   grid-area: stack;
   min-width: 0;
@@ -285,6 +289,17 @@ button {
 
 .eq[hidden] {
   display: none;
+}
+
+.eq-muted {
+  width: 14px;
+  color: var(--muted);
+}
+
+.eq-muted svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
 }
 
 .eq i {

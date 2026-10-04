@@ -24,14 +24,43 @@ async function updateBadge() {
   }
 }
 
+// Tabs that played recently stay listed (paused, resumable) the next time the
+// popup opens — the behavior Chrome's media panel has. Recorded on the same
+// audible events the badge already consumes: no extra wakes.
+const RECENT_MAX = 8;
+
+async function noteRecent(tabId) {
+  try {
+    const { recent } = await chrome.storage.session.get('recent');
+    const next = [tabId, ...((recent ?? []).filter((id) => id !== tabId))].slice(0, RECENT_MAX);
+    await chrome.storage.session.set({ recent: next });
+  } catch {
+    // storage unavailable; the popup just won't show paused media
+  }
+}
+
+async function pruneRecent(tabId) {
+  try {
+    const { recent } = await chrome.storage.session.get('recent');
+    if (Array.isArray(recent) && recent.includes(tabId)) {
+      await chrome.storage.session.set({ recent: recent.filter((id) => id !== tabId) });
+    }
+  } catch {
+    // nothing to do
+  }
+}
+
 // Only audible changes can move the count — every other onUpdated reason is
 // skipped without touching the tabs API.
 chrome.tabs.onUpdated.addListener((tabId, info) => {
-  if (info.audible !== undefined) void updateBadge();
+  if (info.audible === undefined) return;
+  void updateBadge();
+  if (info.audible === true) void noteRecent(tabId);
 });
 
-chrome.tabs.onRemoved.addListener(() => {
+chrome.tabs.onRemoved.addListener((tabId) => {
   void updateBadge();
+  void pruneRecent(tabId);
 });
 
 chrome.runtime.onInstalled.addListener(() => {

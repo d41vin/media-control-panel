@@ -96,6 +96,8 @@ function makeRow(tab) {
   const fav = el('img', 'fav');
   fav.alt = '';
   fav.hidden = true;
+  const favLetter = el('span', 'fav-letter', '?');
+  favLetter.hidden = true;
   const stack = el('div', 't-stack');
   const title = el('div', 't-title');
   const site = el('div', 't-site');
@@ -105,6 +107,11 @@ function makeRow(tab) {
   const eq = el('span', 'eq');
   eq.append(el('i'), el('i'), el('i'));
   eq.hidden = true;
+
+  const eqMuted = el('span', 'eq eq-muted');
+  eqMuted.innerHTML = ICONS.speakerX;
+  eqMuted.title = 'Tab muted';
+  eqMuted.hidden = true;
 
   const playBtn = el('button', 'icon-btn play');
   playBtn.type = 'button';
@@ -119,8 +126,8 @@ function makeRow(tab) {
   chevBtn.title = 'Details';
   chevBtn.setAttribute('aria-expanded', 'false');
 
-  controls.append(eq, playBtn, muteBtn, chevBtn);
-  main.append(idx, fav, stack, controls);
+  controls.append(eqMuted, eq, playBtn, muteBtn, chevBtn);
+  main.append(idx, fav, favLetter, stack, controls);
 
   stack.addEventListener('click', () => void activateTab(rows.get(tab.id)));
   stack.style.cursor = 'pointer';
@@ -138,13 +145,17 @@ function makeRow(tab) {
     probe: null,
     expanded: false,
     playing: !!tab.audible,
+    mediaPlaying: null,
+    pip: false,
     nodes: {
       li,
       idx,
       fav,
+      favLetter,
       title,
       site,
       eq,
+      eqMuted,
       playBtn,
       muteBtn,
       chevBtn,
@@ -261,6 +272,7 @@ function toggleExpand(rec) {
 /** Fill panel values from probe, or fresh from the page (pingNow). */
 function syncPanel(rec, fresh) {
   const n = rec.nodes;
+  if (rec.dragging) return; // never fight the user's hand
   const disabled = !rec.probe;
   n.pos.disabled = n.vol.disabled = n.rate.disabled = disabled;
   n.pipBtn.disabled = disabled;
@@ -295,6 +307,7 @@ function syncPanel(rec, fresh) {
   n.rate.value = String(element.rate);
   setFill(n.rate);
   n.rateReadout.textContent = `${element.rate.toFixed(2)}×`;
+  n.pipBtn.classList.toggle('on', !!rec.pip);
 }
 
 /** One cheap pagePing on the primary frame; refreshes panel readouts. */
@@ -307,24 +320,19 @@ async function pingNow(rec) {
     });
     const state = results[0]?.result;
     if (!state?.present) return null;
-    if (!rec.dragging) {
-      const n = rec.nodes;
-      const live = !(Number.isFinite(state.duration) && state.duration >= 0);
-      n.pos.closest('.panel-row').classList.toggle('live', live);
-      if (!live) {
-        n.pos.max = String(Math.floor(state.duration));
-        n.pos.value = String(Math.floor(state.currentTime));
-        setFill(n.pos);
-        n.posReadout.textContent = `${fmtTime(state.currentTime)} / ${fmtTime(state.duration)}`;
-      }
-      n.vol.value = String(state.volume);
-      setFill(n.vol);
-      n.volReadout.textContent = `${Math.round(state.volume * 100)}%`;
-      n.rate.value = String(state.rate);
-      setFill(n.rate);
-      n.rateReadout.textContent = `${state.rate.toFixed(2)}×`;
-      n.pipBtn.classList.toggle('on', !!state.pip);
+    // fold fresh state into the probe record so updateRow() — the single
+    // render path — always writes the newest known values
+    const p = primaryOfProbe(rec.probe);
+    if (p?.element) {
+      p.element.playing = state.playing;
+      p.element.currentTime = state.currentTime;
+      p.element.duration = state.duration;
+      p.element.volume = state.volume;
+      p.element.rate = state.rate;
     }
+    rec.mediaPlaying = state.playing;
+    rec.pip = !!state.pip;
+    if (!rec.dragging) updateRow(rec);
     return state;
   } catch {
     return null;
@@ -417,7 +425,7 @@ function wirePanel(rec) {
 
 async function pauseAll() {
   const jobs = [...rows.values()].filter((r) => r.playing).map(async (rec) => {
-    rec.playing = false;
+    rec.mediaPlaying = false;
     updateRow(rec);
     try {
       const target = rec.probe
@@ -513,9 +521,13 @@ function removeRow(tabId) {
 function updateRow(rec) {
   const { tab, nodes } = rec;
   const host = hostOf(tab.url);
-  const probe = rec.probe ? primaryOfProbe(rec.probe) : null;
 
-  rec.playing = !!tab.audible || !!(probe && probe.element.playing);
+  // Two truths, kept apart: tab.audible is tab-level and arrives via events;
+  // rec.mediaPlaying is element-level (a muted video plays without being
+  // audible) and comes from probes, pings and our own commands. The stale
+  // probe snapshot must never override a newer command or ping.
+  rec.playing = !!tab.audible || rec.mediaPlaying === true;
+  const probe = rec.probe ? primaryOfProbe(rec.probe) : null;
 
   // title: the media title when it differs from the tab title (song names),
   // otherwise the tab title
@@ -531,24 +543,30 @@ function updateRow(rec) {
   nodes.playBtn.setAttribute('aria-label', rec.playing ? 'Pause' : 'Play');
   nodes.muteBtn.replaceChildren(icon(tab.mutedInfo?.muted ? 'speakerX' : 'speaker'));
   nodes.muteBtn.setAttribute('aria-label', tab.mutedInfo?.muted ? 'Unmute tab' : 'Mute tab');
-  nodes.eq.hidden = !rec.playing;
+  nodes.eqMuted.hidden = !tab.mutedInfo?.muted;
+  nodes.eq.hidden = !rec.playing || !!tab.mutedInfo?.muted;
 
   nodes.li.classList.toggle('paused', !rec.playing);
   nodes.li.classList.toggle('target', tab.id === pinnedTabId);
   nodes.pinBtn.textContent = tab.id === pinnedTabId ? 'Unpin' : 'Pin';
   nodes.pinBtn.classList.toggle('on', tab.id === pinnedTabId);
 
-  // favicon: real one when http(s), letter tile otherwise
+  // favicon: real one when available, letter tile otherwise
   const favUrl = tab.favIconUrl;
-  if (favUrl && /^https?:/.test(favUrl)) {
+  nodes.favLetter.textContent = (host || titleText || '?').charAt(0).toUpperCase();
+  if (favUrl && /^(https?:|data:)/.test(favUrl)) {
     if (nodes.fav.src !== favUrl) nodes.fav.src = favUrl;
     nodes.fav.hidden = false;
+    nodes.favLetter.hidden = true;
     nodes.fav.onerror = () => {
       nodes.fav.hidden = true;
+      nodes.favLetter.hidden = false;
     };
   } else {
     nodes.fav.hidden = true;
     nodes.fav.removeAttribute('src');
+    nodes.favLetter.hidden = false;
+    nodes.favLetter.textContent = (host || titleText || '?').charAt(0).toUpperCase();
   }
 
   if (!nodes.li.parentNode) listEl.append(nodes.li);
@@ -586,7 +604,7 @@ function refreshChrome() {
 
 async function togglePlay(rec) {
   if (!rec) return;
-  rec.playing = !rec.playing;
+  rec.mediaPlaying = rec.playing ? false : true;
   updateRow(rec);
   void reorder();
   try {
@@ -595,7 +613,10 @@ async function togglePlay(rec) {
       : { tabId: rec.tab.id, allFrames: true };
     await chrome.scripting.executeScript({ target, func: pageToggle });
   } catch {
-    // tab navigated away or closed; the audible event stream will correct us
+    // uninjectable tab (chrome://, sandboxed frame): the command never landed,
+    // so fall back to the truth we know instead of the optimistic guess
+    rec.mediaPlaying = null;
+    updateRow(rec);
   }
 }
 
@@ -611,6 +632,17 @@ async function muteTab(rec) {
 }
 
 // --- probe ------------------------------------------------------------------------
+
+/** Land a probe result on a record: primary truth + pip state, then render. */
+function applyProbe(rec, probe) {
+  rec.probe = probe;
+  const primary = probe ? primaryOfProbe(probe) : null;
+  rec.mediaPlaying = probe ? (primary?.element.playing ?? null) : null;
+  rec.pip = probe
+    ? !!probe.frames.find((f) => f.frameId === rec.probe.primaryFrameId)?.pip
+    : false;
+  updateRow(rec);
+}
 
 async function probeTab(rec) {
   try {
@@ -663,8 +695,7 @@ async function adoptTab(tab) {
   void reorder();
   const probe = await probeTab(rec);
   if (!rows.has(tab.id)) return; // tab closed while probing
-  rec.probe = probe;
-  updateRow(rec);
+  applyProbe(rec, probe);
   refreshChrome();
 }
 
@@ -688,9 +719,12 @@ async function init() {
   muteAllBtn.addEventListener('click', () => void muteAll());
   const [tabs, stored] = await Promise.all([
     chrome.tabs.query({}),
-    chrome.storage.session.get('target').catch(() => ({})),
+    chrome.storage.session.get(['target', 'recent']).catch(() => ({})),
   ]);
   pinnedTabId = typeof stored.target === 'number' ? stored.target : null;
+  const recentIds = Array.isArray(stored.recent)
+    ? stored.recent.filter((n) => typeof n === 'number')
+    : [];
 
   // keep the pin in sync if it is cleared elsewhere (e.g. tab closed by the
   // background while the popup is open)
@@ -706,30 +740,52 @@ async function init() {
     updateTargetReadout();
   });
 
-  const candidates = tabs.filter(
-    (t) => t.audible || (t.mutedInfo?.muted && /^https?:/.test(t.url ?? '')),
-  );
+  // candidates: sounding tabs, muted tabs, the pinned target, and tabs that
+  // played recently this session (so paused media stays resumable, like
+  // Chrome's own media panel). Probes settle which of these really hold media.
+  const candidates = tabs.filter((t) => {
+    if (t.id === undefined) return false;
+    return (
+      t.audible ||
+      (t.mutedInfo?.muted && /^https?:/.test(t.url ?? '')) ||
+      t.id === pinnedTabId ||
+      recentIds.includes(t.id)
+    );
+  });
   for (const tab of candidates) makeRow(tab);
   void reorder();
   refreshChrome();
   updateTargetReadout();
 
-  // Probe candidates in parallel; enrich rows as each lands. Muted tabs that
-  // turn out to hold no media quietly leave the list.
+  // Probe candidates in parallel; enrich rows as each lands. Tabs that turn
+  // out to hold no media leave the list — and leave the recent list too, so
+  // it only ever names real media tabs. Audible and pinned tabs stay even
+  // without media (uninjectable pages, paused-live edge cases).
   await Promise.all(
     [...rows.values()].map(async (rec) => {
       const probe = await probeTab(rec);
       if (!rows.has(rec.tab.id)) return;
-      if (!probe && !rec.tab.audible) {
+      const keepWithoutMedia = rec.tab.audible || rec.tab.id === pinnedTabId;
+      if (!probe && !keepWithoutMedia) {
         removeRow(rec.tab.id);
+        void pruneRecent(rec.tab.id);
         return;
       }
-      rec.probe = probe;
-      updateRow(rec);
+      applyProbe(rec, probe);
       refreshChrome();
     }),
   );
   void reorder();
+}
+
+async function pruneRecent(tabId) {
+  try {
+    const { recent } = await chrome.storage.session.get('recent');
+    if (!Array.isArray(recent) || !recent.includes(tabId)) return;
+    await chrome.storage.session.set({ recent: recent.filter((id) => id !== tabId) });
+  } catch {
+    // storage unavailable; the next open just probes a stale id once
+  }
 }
 
 void init();
