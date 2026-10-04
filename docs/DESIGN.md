@@ -84,11 +84,14 @@ dirs, just the pattern:
 
 - **Number column** (24 px): zero-padded index, 10 px, `--muted`. The pinned
   target's number is `--accent`. Purely structural — Swiss editorial rhythm.
-- **Favicon** 16 px, grayscale? no — identity is information; full color.
+- **Favicon** 16 px, full color — identity is information. No favicon: a
+  letter tile (first character of the host) on `--hover`.
 - **Title line** = media title (mediaSession) if it differs from tab title,
-  else tab title. **Site** = hostname, uppercase.
-- **Playing glyph**: 3-bar equalizer, CSS-only, ink at 60 %, static under
-  reduced-motion. **Muted**: struck-through speaker replaces it.
+  else tab title. **Site** = hostname, uppercase; multi-element tabs get
+  `· ×N`.
+- **Playing glyph**: 3-bar equalizer, CSS-only, ink at 55 %, static under
+  reduced-motion. **Muted tab**: struck-through speaker replaces the
+  equalizer. Paused rows set their title to weight 400.
 - **Row controls**: play/pause always visible; mute + chevron visible on
   hover/focus/expanded (desktop pointer convention; keyboard focus also
   reveals). Everything is a real button with `aria-label`.
@@ -105,9 +108,12 @@ dirs, just the pattern:
 
 - **Empty**: big `0`, `NOTHING PLAYING`, hint "Start a video or song in any
   tab — it appears here." Nothing else.
-- **Probe-miss** (audible tab where no element was found, e.g. cast tab): row
-  still renders with tab-level mute + go-to-tab only; play/pause hidden. Never
-  a dead button.
+- **Recently playing** (like Chrome's media panel): tabs that played this
+  session stay listed while paused, so media remains resumable after the
+  popup reopens; entries whose media disappears are pruned.
+- **Probe-miss** (audible tab where no element was reachable, e.g. a
+  `chrome://` player): row still renders with tab-level mute + go-to-tab only;
+  play/pause hides or reverts to known truth. Never a lying button.
 - **Dark**: `prefers-color-scheme`, token swap only — no second stylesheet.
 - **Focus**: every control focus-visible ring; rows are `<li>` with buttons
   inside — tab order: play/pause → mute → chevron → (expanded: sliders, then

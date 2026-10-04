@@ -5,6 +5,10 @@ Controls behavior, Swiss design — pure HTML/CSS/JS, no build step, no
 frameworks, minimal idle resource use. See RESEARCH.md for why and DESIGN.md
 for the look.
 
+**Status: shipped.** Build order below was followed; deviations and additions
+are recorded in git history (recently-playing list, letter tiles, muted glyph
+and the truthful play-state model came out of testing).
+
 ## Architecture
 
 ```

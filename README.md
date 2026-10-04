@@ -1,77 +1,97 @@
 # Media Control Panel
 
-A fast, lightweight Chrome extension that puts every video and audio player in your browser into
-one side panel — play, pause, seek, per-item volume and speed, and more. Inspired by Chrome's
-built-in Global Media Controls, but far more capable: it works across tabs, exposes per-item
-volume and playback rate, and applies global defaults that sites can't silently take away.
+A Swiss-minimal Chrome extension that puts every tab playing media into one toolbar popup —
+Chrome's own Global Media Controls, but stronger: pause everything, mute everything, seek, per-tab
+volume and speed, Picture-in-Picture, and a keyboard command surface. Built as pure HTML/CSS/JS:
+no framework, no build step, no webfonts, nothing to compile.
 
-Everything is local: no accounts, no analytics, no network requests. Live session data is kept in
-memory and `chrome.storage.session` (cleared when the browser closes); preferences live in
-`chrome.storage.local` on your machine only.
+Everything is local: no accounts, no analytics, no network requests. The only state is the pinned
+target and the recently-playing list in `chrome.storage.session` (cleared when the browser closes).
 
-## Features (v0.1)
+## Features (v2.0)
 
-- **Cross-tab media cards** — every `<audio>`/`<video>` element in every tab (including
-  cross-origin iframes) shows up as a card with artwork/favicon, title, site and live/paused state.
-- **Transport controls** — play/pause, −10 s / +10 s seek, and drag-to-scrub progress bar.
-- **Per-item volume and mute** — 0–100 % per media element, independent of tab/site volume.
-- **Per-item playback speed** — 0.25×–4× slider per card.
-- **Global default speed** — set a default (e.g. 1.25×) that is applied automatically when media
-  appears or starts playing, until a per-item override takes over. Applied "once", not enforced —
-  sites can still change speed afterwards (enforcement/"lock" mode is on the roadmap).
-- **Jump to source** — clicking a card focuses that tab and window.
-- **Pin** — mark one item as the command target (used by future shortcuts).
-- **Pause all / Mute all** across every registered item.
-- **Live-stream aware** — live media is labelled and seeks are disabled.
+- **One row per media tab** — sounding tabs, muted tabs, and recently-playing tabs show up with
+  favicon, media title (from the page's media session when available), hostname and live playback
+  state. Cross-origin iframes and open shadow roots are covered.
+- **Row controls** — play/pause and tab mute on every row; clicking the title switches to the tab.
+- **Expanded panel** — seek bar with times (or a LIVE tag on streams), ±10 s, element volume,
+  playback speed 0.25×–4×, Picture-in-Picture toggle, switch to tab, pin as target, close tab.
+- **Pause all / Mute all** in the header; Mute all flips to Unmute all contextually.
+- **Pinned target** — mark one tab (red index) and toggle its playback from the keyboard without
+  opening the popup.
+- **Keyboard commands** (remappable at `chrome://extensions/shortcuts`):
+  - `Alt+Shift+Space` — play/pause the pinned target
+  - `Alt+Shift+P` — pause media in every tab that has any
+  - `Alt+Shift+M` — mute all audible tabs / unmute what this extension muted
+- **Playing-count badge** — the toolbar icon shows how many tabs are making sound, like Chrome's
+  own media icon.
+- **Dark mode** — follows the system, token swap only.
 
 ## Install (unpacked)
 
-1. Build: `npm install && npm run build` (output lands in `dist/`).
-2. Open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, select `dist/`.
-3. Click the toolbar icon to open the side panel. To use it in private windows also enable
-   **Allow in Incognito** on the extension card.
+1. Open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, select the
+   `extension/` folder.
+2. Click the toolbar icon. For private windows also enable **Allow in Incognito** on the
+   extension card.
+3. Optional: `npm run icons` regenerates the icon set (pure Node, no dependencies).
 
 ## Try it
 
-`npm run serve`, then open <http://localhost:8080/test/media-page.html> — a fixture page with two
-remote videos, a local tone, a remote mp3 and a cross-origin YouTube embed. All five should appear
-as separate cards.
+`npm run serve`, open <http://localhost:8080/test/media-page.html> (two remote videos, a local
+tone, a remote mp3 and a cross-origin YouTube embed), then open the popup. For the UI without
+Chrome at all: <http://localhost:8080/test/popup-mock.html> runs the real popup against a mock
+browser; <http://localhost:8080/test/background-mock.html> asserts the full command matrix.
 
-## How it works
+`npm test` runs static checks (module syntax, manifest sanity, icons, references, and a guard
+that injected functions stay serialization-safe).
 
-- **Content script** (all frames, all http/https sites): discovers media via a debounced
-  `MutationObserver` and element events — no polling. It stays fully dormant (no ports, no
-  messages) until a panel is attached, so pages without the panel open cost ~nothing.
-- **Service worker**: keeps the session registry and routes commands. It sleeps whenever nothing
-  happens; the registry is rebuilt from content-script snapshots whenever the panel reattaches.
-- **Side panel**: vanilla DOM, no framework. Pings the worker every 20 s while open, interpolates
-  progress locally, and receives at most ~1 progress update per second per playing item.
-- Progress updates only flow **while the panel is open**; with the panel closed the extension is
-  completely silent.
+## Why it's light
 
-## Limitations
+There are **no persistent content scripts**. While the popup is closed the extension is two
+sleeping event listeners (badge + keyboard commands); the service worker goes dormant after 30
+idle seconds like any MV3 worker. Detection uses `tabs.query` (audible/muted need no permission),
+control is on-demand `chrome.scripting.executeScript` only when you click something, and the seek
+bar's 1-second refresh runs only while a row is expanded **and** playing. Total unpacked size is
+under 25 KB including icons.
 
-- Media inside **shadow DOM** players isn't discovered yet.
-- **DRM** streams (Netflix etc.): transport controls generally work, but some sites reset
-  extension-applied values; "lock" mode is planned to counter that.
-- Metadata is read from the page's Media Session API when available, with DOM fallbacks.
-- Some sites swap or recreate players aggressively; cards refresh automatically, but a broken
-  card can be cleared by re-opening the panel.
+Permissions, exactly:
 
-## Roadmap
+| Permission | Why |
+|---|---|
+| `scripting` | inject the control functions into media tabs |
+| `storage` | pinned target + recently-playing list (session-scoped) |
+| `<all_urls>` (host) | `executeScript` into arbitrary tabs; also unlocks tab titles |
 
-1. **Rules** — Global → Site → Tab → Item setting hierarchy with provenance badges and lock mode.
-2. **Volume boost** — per-tab amplification beyond 100 % via `tabCapture` + a Web Audio gain stage
-   (with limiter), which is why it will be a separate, per-tab opt-in control rather than a slider
-   that silently crosses 100 %.
-3. **Power features** — keyboard shortcuts (including optional hardware media-key interception),
-   compact toolbar popup, configurable seek step.
-4. **Provider adapters** — next/previous and queue controls for YouTube & co.
-5. **Later** — PiP controls, A/B loop, sleep timer, EQ/balance/mono, automation rules.
+No `tabs` permission (the "read your browsing history" warning) — audible/muted state is free,
+and host permissions already unlock titles.
 
-## Development
+## Design
 
-- `npm run build` — bundle to `dist/`
-- `npm run watch` — rebuild on change (reload the extension in Chrome to pick it up)
-- `npm run typecheck` — strict TypeScript check
-- `npm run serve` — static server for the test fixture page
+International Typographic Style: an 8 px grid, hairlines, sharp corners, ink on paper with one
+Swiss red accent that only ever marks meaning (the pinned target, live indicators). System
+Helvetica stack — zero font downloads. The full token set, component vocabulary (mapped from
+shadcn/ui) and interaction specs live in [docs/DESIGN.md](docs/DESIGN.md).
+
+## Architecture
+
+```
+extension/
+  manifest.json    MV3 — scripting+storage, <all_urls>, 3 commands, no content scripts
+  popup.html/css/js  the whole UI; exists only while open
+  background.js    badge count + keyboard commands; sleeps otherwise
+  lib/page.js      injected functions (probe/ping/toggle/pause/seek/volume/rate/PiP)
+scripts/           icon generator + static checks
+test/              mock browser, popup harness, background harness, media fixture
+docs/              RESEARCH.md (why), DESIGN.md (look), PLAN.md (roadmap)
+```
+
+See [docs/RESEARCH.md](docs/RESEARCH.md) for how Chrome's Global Media Controls works, what other
+media-control extensions do, and why this one is built the way it is.
+
+## Known limits
+
+- Media inside closed shadow roots, DRM-protected pages and WebAudio-only playback can't be
+  reached by any extension in this category (Chrome's internal media session service is not
+  exposed to extensions).
+- Next/previous track requires per-site adapters; not built (roadmap).
+- `chrome://` pages can be listed and muted but not play/paused — they are not injectable.
