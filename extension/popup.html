@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Media Control</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header class="header">
+    <h1 class="wordmark">Media Control<span id="count" class="count" hidden></span></h1>
+    <div class="header-actions">
+      <button id="pause-all" class="text-btn" type="button" title="Pause media in every tab">Pause all</button>
+      <button id="mute-all" class="text-btn" type="button" title="Mute or unmute every listed tab">Mute all</button>
+    </div>
+  </header>
+
+  <ul id="list" class="list" aria-label="Tabs playing media"></ul>
+
+  <div id="empty" class="empty">
+    <div class="empty-zero" aria-hidden="true">0</div>
+    <p class="empty-label">Nothing playing</p>
+    <p class="empty-hint">Start a video or song in any tab&nbsp;&mdash; it appears here.</p>
+  </div>
+
+  <footer class="footer">
+    <span id="hints" class="footer-hints"></span>
+    <span id="target-readout" class="footer-target"></span>
+  </footer>
+
+  <script src="popup.js" type="module"></script>
+</body>
+</html>
