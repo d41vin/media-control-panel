@@ -251,6 +251,10 @@ button {
   fill: currentColor;
 }
 
+.icon-btn[hidden] {
+  display: none;
+}
+
 .icon-btn:hover {
   background: var(--hairline);
 }

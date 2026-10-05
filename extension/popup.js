@@ -14,6 +14,7 @@ import {
   pageSetRate,
   pagePiP,
 } from './lib/page.js';
+import { adapterFor } from './lib/adapters.js';
 
 const listEl = document.getElementById('list');
 const emptyEl = document.getElementById('empty');
@@ -31,6 +32,8 @@ const ICONS = {
   speaker: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3z"/><path d="M16.5 7.5a6 6 0 0 1 0 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
   speakerX: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3z"/><path d="M16 9l5 6m0-6l-5 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
   chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>',
+  next: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l8 6-8 6V6zm10 0h2v12h-2z"/></svg>',
+  prev: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6l-8 6 8 6V6zM6 6h2v12H6z"/></svg>',
 };
 
 function icon(name) {
@@ -117,6 +120,22 @@ function makeRow(tab) {
   playBtn.type = 'button';
   playBtn.title = 'Play / pause';
 
+  // Track adapters (YouTube/Spotify/SoundCloud): hidden unless the tab's site
+  // has one; updateRow flips visibility as the tab navigates.
+  const prevBtn = el('button', 'icon-btn prev');
+  prevBtn.type = 'button';
+  prevBtn.title = 'Previous track';
+  prevBtn.setAttribute('aria-label', 'Previous track');
+  prevBtn.replaceChildren(icon('prev'));
+  prevBtn.hidden = true;
+
+  const nextBtn = el('button', 'icon-btn next');
+  nextBtn.type = 'button';
+  nextBtn.title = 'Next track';
+  nextBtn.setAttribute('aria-label', 'Next track');
+  nextBtn.replaceChildren(icon('next'));
+  nextBtn.hidden = true;
+
   const muteBtn = el('button', 'icon-btn quiet mute');
   muteBtn.type = 'button';
   muteBtn.title = 'Mute / unmute tab';
@@ -126,7 +145,7 @@ function makeRow(tab) {
   chevBtn.title = 'Details';
   chevBtn.setAttribute('aria-expanded', 'false');
 
-  controls.append(eqMuted, eq, playBtn, muteBtn, chevBtn);
+  controls.append(eqMuted, eq, prevBtn, playBtn, nextBtn, muteBtn, chevBtn);
   main.append(idx, fav, favLetter, stack, controls);
 
   stack.addEventListener('click', () => void activateTab(rows.get(tab.id)));
@@ -136,6 +155,8 @@ function makeRow(tab) {
   li.append(main, panel);
 
   playBtn.addEventListener('click', () => void togglePlay(rows.get(tab.id)));
+  prevBtn.addEventListener('click', () => void runAdapter(rows.get(tab.id), 'prev'));
+  nextBtn.addEventListener('click', () => void runAdapter(rows.get(tab.id), 'next'));
   muteBtn.addEventListener('click', () => void muteTab(rows.get(tab.id)));
   chevBtn.addEventListener('click', () => void toggleExpand(rows.get(tab.id)));
 
@@ -156,7 +177,9 @@ function makeRow(tab) {
       site,
       eq,
       eqMuted,
+      prevBtn,
       playBtn,
+      nextBtn,
       muteBtn,
       chevBtn,
       panel,
@@ -288,29 +311,30 @@ function syncPanel(rec, fresh) {
     n.rateReadout.textContent = '—';
     return;
   }
-  if (fresh) {
-    // panel just opened: take a real reading instead of the probe snapshot
-    void pingNow(rec);
-    return;
-  }
 
+  // probe snapshot first, so the panel is populated the moment it opens
   const element = primaryOfProbe(rec.probe)?.element;
-  if (!element) return;
-  const live = element.duration === -1;
-  n.pos.closest('.panel-row').classList.toggle('live', live);
-  if (!live) {
-    n.pos.max = String(Math.floor(element.duration));
-    n.pos.value = String(Math.floor(element.currentTime));
-    setFill(n.pos);
-    n.posReadout.textContent = `${fmtTime(element.currentTime)} / ${fmtTime(element.duration)}`;
+  if (element) {
+    const live = element.duration === -1;
+    n.pos.closest('.panel-row').classList.toggle('live', live);
+    if (!live) {
+      n.pos.max = String(Math.floor(element.duration));
+      n.pos.value = String(Math.floor(element.currentTime));
+      setFill(n.pos);
+      n.posReadout.textContent = `${fmtTime(element.currentTime)} / ${fmtTime(element.duration)}`;
+    }
+    n.vol.value = String(element.volume);
+    setFill(n.vol);
+    n.volReadout.textContent = `${Math.round(element.volume * 100)}%`;
+    n.rate.value = String(element.rate);
+    setFill(n.rate);
+    n.rateReadout.textContent = `${element.rate.toFixed(2)}×`;
+    n.pipBtn.classList.toggle('on', !!rec.pip);
   }
-  n.vol.value = String(element.volume);
-  setFill(n.vol);
-  n.volReadout.textContent = `${Math.round(element.volume * 100)}%`;
-  n.rate.value = String(element.rate);
-  setFill(n.rate);
-  n.rateReadout.textContent = `${element.rate.toFixed(2)}×`;
-  n.pipBtn.classList.toggle('on', !!rec.pip);
+  if (fresh) {
+    // then a real reading replaces the possibly-stale snapshot
+    void pingNow(rec);
+  }
 }
 
 /** One cheap pagePing on the primary frame; refreshes panel readouts. */
@@ -556,6 +580,10 @@ function updateRow(rec) {
   nodes.pinBtn.textContent = tab.id === pinnedTabId ? 'Unpin' : 'Pin';
   nodes.pinBtn.classList.toggle('on', tab.id === pinnedTabId);
 
+  // track adapters follow the tab's current site
+  rec.adapter = adapterFor(tab.url);
+  nodes.prevBtn.hidden = nodes.nextBtn.hidden = !rec.adapter;
+
   // favicon: real one when available, letter tile otherwise
   const favUrl = tab.favIconUrl;
   nodes.favLetter.textContent = (host || titleText || '?').charAt(0).toUpperCase();
@@ -606,21 +634,38 @@ function refreshChrome() {
 
 // --- tab-level actions -------------------------------------------------------------
 
+/** Injection target: the primary frame when probed, all frames otherwise. */
+function targetFor(rec) {
+  return rec.probe
+    ? { tabId: rec.tab.id, frameIds: [primaryOfProbe(rec.probe)?.frameId] }
+    : { tabId: rec.tab.id, allFrames: true };
+}
+
 async function togglePlay(rec) {
   if (!rec) return;
   rec.mediaPlaying = rec.playing ? false : true;
   updateRow(rec);
   void reorder();
   try {
-    const target = rec.probe
-      ? { tabId: rec.tab.id, frameIds: [primaryOfProbe(rec.probe)?.frameId] }
-      : { tabId: rec.tab.id, allFrames: true };
-    await chrome.scripting.executeScript({ target, func: pageToggle });
+    await chrome.scripting.executeScript({ target: targetFor(rec), func: pageToggle });
   } catch {
     // uninjectable tab (chrome://, sandboxed frame): the command never landed,
     // so fall back to the truth we know instead of the optimistic guess
     rec.mediaPlaying = null;
     updateRow(rec);
+  }
+}
+
+/** Next/previous track through the site's own player buttons. */
+async function runAdapter(rec, direction) {
+  if (!rec?.adapter) return;
+  try {
+    await chrome.scripting.executeScript({
+      target: targetFor(rec),
+      func: direction === 'next' ? rec.adapter.next : rec.adapter.prev,
+    });
+  } catch {
+    // tab gone or uninjectable; nothing to correct
   }
 }
 
@@ -695,6 +740,51 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   removeRow(tabId);
+});
+
+// --- keyboard navigation -------------------------------------------------------------
+//
+// Arrows move focus between rows (landing on the row's play button; Tab then
+// reaches the row's other controls natively), Home/End jump to first/last,
+// and Left/Right seek ±10 s on an expanded row. Pure convenience over the
+// native tab order — every control stays reachable by Tab alone.
+
+function rowRecords() {
+  const byNode = new Map([...rows.values()].map((r) => [r.nodes.li, r]));
+  return [...listEl.querySelectorAll('.row')].map((li) => byNode.get(li));
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+  const recs = rowRecords();
+  if (!recs.length) return;
+
+  const active = document.activeElement;
+  const onInput = active?.tagName === 'INPUT';
+  const activeRow = active?.closest?.('.row');
+  const idx = recs.findIndex((r) => r.nodes.li === activeRow);
+  const focusPlay = (rec) => rec?.nodes.playBtn.focus();
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    focusPlay(recs[idx === -1 ? 0 : (idx + 1) % recs.length]);
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    focusPlay(recs[idx === -1 ? recs.length - 1 : (idx - 1 + recs.length) % recs.length]);
+  } else if (e.key === 'Home' && !onInput) {
+    e.preventDefault();
+    focusPlay(recs[0]);
+  } else if (e.key === 'End' && !onInput) {
+    e.preventDefault();
+    focusPlay(recs[recs.length - 1]);
+  } else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !onInput && idx !== -1) {
+    const rec = recs[idx];
+    if (rec.expanded && rec.probe) {
+      e.preventDefault();
+      void exec(rec, pageSeekBy, { seconds: e.key === 'ArrowRight' ? 10 : -10 });
+      setTimeout(() => void pingNow(rec), 120);
+    }
+  }
 });
 
 async function adoptTab(tab) {

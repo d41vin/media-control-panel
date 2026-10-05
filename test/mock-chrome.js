@@ -56,16 +56,30 @@ function fakeTab(def) {
     // harness-only handles
     _elements: elements,
     _injectable: def.injectable !== false,
+    _siteButtons: def.siteButtons ?? {}, // '.selector' -> click counter name
+    _clicks: {},
   };
   Object.defineProperty(tab, '_doc', {
     get() {
       const els = this._elements;
+      const tabRef = this;
       return {
         querySelectorAll(sel) {
           if (sel === 'video, audio' || sel === 'video') {
             return els.filter((el) => (sel === 'video' ? el.tagName === 'VIDEO' : true));
           }
           return []; // no shadow roots in the fake pages
+        },
+        querySelector(sel) {
+          if (sel in tabRef._siteButtons) {
+            return {
+              click() {
+                const key = tabRef._siteButtons[sel];
+                tabRef._clicks[key] = (tabRef._clicks[key] ?? 0) + 1;
+              },
+            };
+          }
+          return null;
         },
         get pictureInPictureElement() {
           return els.find((el) => el._pip) ?? null;

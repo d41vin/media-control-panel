@@ -101,6 +101,10 @@
       title: 'Big Buck Bunny — YouTube',
       url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ',
       favicon: faviconSvg('Y', '#f00'),
+      siteButtons: {
+        '.ytp-next-button': 'next',
+        '.ytp-prev-button': 'prev',
+      },
       elements: [{ tag: 'VIDEO', playing: true, time: 83, duration: 596, volume: 0.8 }],
     });
     mock.addTab({

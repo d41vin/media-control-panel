@@ -217,8 +217,22 @@ async function main() {
 
     // --- expanded panel: ping, seek, volume, rate ----------------------------
     await evalIn(cdp, popupSession, `document.querySelector('.row .chev').click()`);
-    await sleep(400); // fresh ping
-    const posReadout = await evalIn(cdp, popupSession, `document.querySelector('.row .pos-readout').textContent`);
+    let posReadout = '—';
+    try {
+      posReadout = await waitFor(() =>
+        evalIn(cdp, popupSession, `document.querySelector('.row .pos-readout').textContent`).then((t) =>
+          t.includes('/') ? t : null,
+        ),
+      );
+    } catch {
+      posReadout = await evalIn(cdp, popupSession, `document.querySelector('.row .pos-readout').textContent`);
+      const diag = await evalIn(
+        cdp,
+        popupSession,
+        `(() => ({ site: document.querySelector('.row .t-site').textContent, posDisabled: document.querySelector('.row .pos').disabled, rows: document.querySelectorAll('.row').length }))()`,
+      );
+      console.log('  ..  readout diagnostics:', JSON.stringify(diag));
+    }
     posReadout.includes('/')
       ? ok(`live position readout (${posReadout.trim()})`)
       : bad('live position readout', `got "${posReadout}"`);
@@ -346,6 +360,57 @@ async function main() {
     reopenRowVisible
       ? ok('recently-playing tab stays listed after popup reopen')
       : bad('recently-playing tab stays listed after popup reopen', JSON.stringify(reopenState));
+
+    // --- track adapters -----------------------------------------------------------------
+    // The fixture tab is 127.0.0.1 — no adapter, so prev/next must be hidden.
+    const adapterHidden = await evalIn(
+      cdp,
+      popupSession2,
+      `[...document.querySelectorAll('.row')].every(r => r.querySelector('.prev').hidden && r.querySelector('.next').hidden)`,
+    );
+    adapterHidden
+      ? ok('adapter buttons hidden on non-adapter sites')
+      : bad('adapter buttons hidden on non-adapter sites', 'prev/next visible on 127.0.0.1');
+    // The youtube adapter function itself, run against a real DOM: the page
+    // gets a fake .ytp-next-button, the real injected source clicks it.
+    const adapterClick = await evalIn(
+      cdp,
+      mediaSession,
+      `(async () => {
+        const b = document.createElement('button');
+        b.className = 'ytp-next-button';
+        let clicks = 0;
+        b.click = () => { clicks++; };
+        document.body.append(b);
+        const lib = await import('/extension/lib/adapters.js');
+        const r = lib.ADAPTERS.youtube.next();
+        b.remove();
+        return { acted: r.acted, clicks };
+      })()`,
+      true,
+    );
+    adapterClick?.acted && adapterClick.clicks === 1
+      ? ok('youtube adapter clicks the site next button')
+      : bad('youtube adapter clicks the site next button', JSON.stringify(adapterClick));
+
+    // --- keyboard navigation ----------------------------------------------------------
+    // ArrowDown moves focus between rows; ArrowLeft seeks the expanded row.
+    const keyNav = await evalIn(
+      cdp,
+      popupSession2,
+      `(async () => {
+        const rows = [...document.querySelectorAll('.row')];
+        if (!rows.length) return { rows: 0 };
+        rows[0].querySelector('.play').focus();
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+        const afterDown = document.activeElement.closest('.row');
+        return { rows: rows.length, movedTo: rows.indexOf(afterDown), focused: document.activeElement.className };
+      })()`,
+      true,
+    );
+    keyNav?.rows >= 1 && keyNav.movedTo !== -1 && keyNav.focused.includes('play')
+      ? ok(`arrow key focuses a row's play button (${keyNav.rows} row(s)) — multi-row walk covered in the mock`)
+      : bad('arrow key focuses a row\'s play button', JSON.stringify(keyNav));
 
     // --- commands registered ----------------------------------------------------------
     const commands = await evalIn(

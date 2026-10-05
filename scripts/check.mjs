@@ -19,7 +19,7 @@ const fail = (msg) => {
 const ok = (msg) => console.log(`ok   ${msg}`);
 
 // 1. every JS file parses as a module
-for (const rel of ['popup.js', 'background.js', 'lib/page.js']) {
+for (const rel of ['popup.js', 'background.js', 'lib/page.js', 'lib/adapters.js']) {
   const file = join(ext, rel);
   const r = spawnSync(process.execPath, ['--input-type=module', '--check'], {
     input: readFileSync(file),
@@ -82,17 +82,21 @@ for (const ref of ['popup.css', 'popup.js']) {
 // 5. page.js functions are self-contained (no module-scope references that
 //    would break after toString serialization)
 const pageSrc = readFileSync(join(ext, 'lib', 'page.js'), 'utf8');
+const adapterSrc = readFileSync(join(ext, 'lib', 'adapters.js'), 'utf8');
 const fns = [...pageSrc.matchAll(/export (?:async )?function (page\w+)/g)].map((m) => m[1]);
+// adapter next/prev fns are injected too — they live inside the ADAPTERS literal
+const adapterFns = [...adapterSrc.matchAll(/function ((?:yt|sp|sc)(?:Next|Prev))\(/g)].map((m) => m[1]);
 if (!fns.length) fail('no exported page functions found');
-for (const fn of fns) {
-  const body = pageSrc.slice(pageSrc.indexOf(`function ${fn}`));
-  const end = body.indexOf('\nexport ', 1);
-  const src = end === -1 ? body : body.slice(0, end);
+for (const fn of [...fns, ...adapterFns]) {
+  const src = pageSrc.includes(`function ${fn}`) ? pageSrc : adapterSrc;
+  const body = src.slice(src.indexOf(`function ${fn}`));
+  const end = body.indexOf('\nfunction ', 1);
+  const code = end === -1 ? body : body.slice(0, end);
   for (const helper of ['collectMedia(', 'primaryOf(']) {
-    if (src.includes(helper)) fail(`${fn} references module-scope helper ${helper}`);
+    if (code.includes(helper)) fail(`${fn} references module-scope helper ${helper}`);
   }
 }
-ok(`page.js functions self-contained (${fns.length} exported)`);
+ok(`page.js + adapters.js functions self-contained (${fns.length + adapterFns.length} injected)`);
 
 if (failures) {
   console.error(`\n${failures} check(s) failed`);
