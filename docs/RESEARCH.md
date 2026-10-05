@@ -128,6 +128,28 @@ can appear until probed (probe filters them).
 - chrome.tabs API reference — permission notes on `audible`/`mutedInfo`/`title`
 - developer.chrome.com — Service worker event handling (top-level listeners,
   event filters)
+- developer.chrome.com — `commands` (allowed keys: `Space` is valid;
+  `Alt+Shift+Space` parses), `action` (no theme-aware icons; badge APIs),
+  `scripting` (func serialization rules; **`ScriptInjectionTarget` has only
+  `frameIds: number[]` — there is no singular `frameId`, and a misspelled key
+  is silently ignored, which is how the first build injected into the main
+  frame instead of an iframe's media**)
 - github.com/nuwanprabhath/tab-media-controller — architecture + feature review
 - StreamKeys / Volume Master / TabNoodle — Web Store listings, pattern review
 - shadcn/ui component catalog — component vocabulary mapping (see DESIGN.md)
+
+## Testing the real extension (what we learned)
+
+- **Branded Chrome 137+ ignores `--load-extension`** (the
+  `DisableLoadExtensionCommandLineSwitch` workaround is also gone), and
+  Chrome's own component extensions also register `service_worker` targets —
+  match the worker by `url.endsWith('/background.js')`, never by scheme alone.
+- The E2E rig (`scripts/e2e.mjs`) therefore drives **Edge** (Chromium, still
+  honors `--load-extension`) over raw CDP with node's built-in WebSocket:
+  popup.html opened as a page behaves like the real popup with full
+  `chrome.*` context. 22 assertions, all passing.
+- Edge rejects `Alt+Shift+P` (unassigned); it stays as the suggested key for
+  Chrome, and every command is user-remappable.
+- A browser binary was once downloaded into this OneDrive-synced repo for
+  testing and the antivirus flagged it; it was removed immediately and the
+  rig uses the installed Edge instead. Don't ship binaries in synced repos.

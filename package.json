@@ -6,6 +6,8 @@
   "type": "module",
   "scripts": {
     "icons": "node scripts/make-icons.mjs",
-    "serve": "node serve.mjs"
+    "serve": "node serve.mjs",
+    "test": "node scripts/check.mjs",
+    "e2e": "node scripts/e2e.mjs"
   }
 }

@@ -12,8 +12,12 @@ import { fileURLToPath } from 'node:url';
 const OUT = join(dirname(fileURLToPath(import.meta.url)), '..', 'extension', 'icons');
 
 const S = 512;
-const INK = [17, 17, 17];
+// Paper square + ink triangle + red counter-square. A dark icon vanishes on
+// Chrome's dark toolbar and a light one on the light one — a paper square
+// with an ink triangle stays legible on both, and the API has no theme-aware
+// icons to lean on (verified against the action docs).
 const PAPER = [255, 255, 255];
+const INK = [17, 17, 17];
 const RED = [227, 6, 19];
 
 // Triangle pointing right, optically centered (slightly left of true center
@@ -38,8 +42,8 @@ function inTriangle(x, y) {
 
 function renderPixel(x, y) {
   if (x >= SQ.x0 && x < SQ.x1 && y >= SQ.y0 && y < SQ.y1) return RED;
-  if (inTriangle(x, y)) return PAPER;
-  return INK;
+  if (inTriangle(x, y)) return INK;
+  return PAPER;
 }
 
 // --- master raster -----------------------------------------------------------

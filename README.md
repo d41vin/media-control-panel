@@ -35,19 +35,30 @@ target and the recently-playing list in `chrome.storage.session` (cleared when t
 
 1. Open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, select the
    `extension/` folder.
-2. Click the toolbar icon. For private windows also enable **Allow in Incognito** on the
+2. **Pin the icon**: click the puzzle-piece menu in the toolbar and pin **Media Control** —
+   Chrome keeps new extensions hidden behind it (this is Chrome behavior, not a bug).
+3. Click the toolbar icon. For private windows also enable **Allow in Incognito** on the
    extension card.
-3. Optional: `npm run icons` regenerates the icon set (pure Node, no dependencies).
+4. Optional: `npm run icons` regenerates the icon set (pure Node, no dependencies).
+
+Note on shortcuts: Chrome may leave a command unassigned if another app took the key
+(Edge, for example, claims `Alt+Shift+P`). Check `chrome://extensions/shortcuts` — every
+command is remappable there.
 
 ## Try it
 
 `npm run serve`, open <http://localhost:8080/test/media-page.html> (two remote videos, a local
-tone, a remote mp3 and a cross-origin YouTube embed), then open the popup. For the UI without
-Chrome at all: <http://localhost:8080/test/popup-mock.html> runs the real popup against a mock
-browser; <http://localhost:8080/test/background-mock.html> asserts the full command matrix.
+tone, a remote mp3, a cross-origin YouTube embed and a live canvas video), then open the popup.
+For the UI without Chrome at all: <http://localhost:8080/test/popup-mock.html> runs the real
+popup against a mock browser; <http://localhost:8080/test/background-mock.html> asserts the
+full command matrix.
 
 `npm test` runs static checks (module syntax, manifest sanity, icons, references, and a guard
-that injected functions stay serialization-safe).
+that injected functions stay serialization-safe). `npm run e2e` goes further: it launches a
+real Chromium browser (Edge via CDP — branded Chrome 137+ ignores `--load-extension`) with the
+unpacked extension loaded, opens the popup as an extension page, and drives 22 end-to-end
+assertions against the live fixture — detection, titles, play/pause/resume, seek, volume,
+speed, mute, global actions, badge, pin, reopen listing and command registration.
 
 ## Why it's light
 
