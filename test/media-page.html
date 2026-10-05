@@ -33,5 +33,25 @@
     <p>The player lives in a separate frame; it should still be discovered via <code>all_frames</code>.</p>
     <iframe width="480" height="270" src="https://www.youtube.com/embed/aqz-KE-bpKQ"
       allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+
+    <h2>Live canvas video (never audible, never muted-tab)</h2>
+    <p>A <code>captureStream</code> video: infinite duration → the popup should show the LIVE tag.</p>
+    <video id="canvas-video" width="480" controls muted></video>
+    <script>
+      const cv = document.createElement('canvas');
+      cv.width = 320;
+      cv.height = 180;
+      const ctx = cv.getContext('2d');
+      let frame = 0;
+      setInterval(() => {
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(0, 0, 320, 180);
+        ctx.fillStyle = '#e30613';
+        ctx.fillRect((frame++ * 7) % 300, 80, 30, 20);
+      }, 100);
+      const cv_video = document.getElementById('canvas-video');
+      cv_video.srcObject = cv.captureStream(10);
+      cv_video.play().catch(() => {});
+    </script>
   </body>
 </html>
