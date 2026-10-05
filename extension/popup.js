@@ -121,7 +121,7 @@ function makeRow(tab) {
   muteBtn.type = 'button';
   muteBtn.title = 'Mute / unmute tab';
 
-  const chevBtn = el('button', 'icon-btn quiet chev');
+  const chevBtn = el('button', 'icon-btn chev');
   chevBtn.type = 'button';
   chevBtn.title = 'Details';
   chevBtn.setAttribute('aria-expanded', 'false');
