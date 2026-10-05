@@ -142,7 +142,7 @@ async function handleCommand(command) {
       const frames = results.filter((r) => r.result?.elements?.length);
       let frameId = frames.find((r) => r.result.elements.some((e) => e.playing))?.frameId;
       frameId ??= frames[0]?.frameId;
-      const target = frameId !== undefined ? { tabId, frameId } : { tabId, allFrames: true };
+      const target = frameId !== undefined ? { tabId, frameIds: [frameId] } : { tabId, allFrames: true };
       await chrome.scripting.executeScript({ target, func: pageToggle });
     } catch {
       // probe failed but the tab exists: last-resort toggle everywhere

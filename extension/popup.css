@@ -112,6 +112,10 @@ button {
   text-decoration-thickness: 1px;
 }
 
+.text-btn:active:not(:disabled) {
+  opacity: 0.55;
+}
+
 .text-btn:disabled {
   color: var(--faint);
   cursor: default;
@@ -238,6 +242,7 @@ button {
   padding: 0;
   background: none;
   border: 0;
+  color: var(--ink);
 }
 
 .icon-btn svg {
@@ -250,15 +255,18 @@ button {
   background: var(--hairline);
 }
 
-.icon-btn.secondary {
-  opacity: 0;
-  transition: opacity 120ms ease-out;
+.icon-btn:active {
+  background: var(--hairline);
+  color: var(--muted);
 }
 
-.row:hover .icon-btn.secondary,
-.row:focus-within .icon-btn.secondary,
-.row.expanded .icon-btn.secondary {
-  opacity: 1;
+/* Secondary controls stay visible (discoverable) at reduced emphasis. */
+.icon-btn.quiet {
+  color: var(--muted);
+}
+
+.icon-btn.quiet:hover {
+  color: var(--ink);
 }
 
 .icon-btn.on {
@@ -321,13 +329,24 @@ button {
 
 /* --- expanded panel ---------------------------------------------------------- */
 
+/* Collapsed rows collapse to 0fr; expanding animates the grid row open.
+   The padding lives on the inner wrapper so 0fr is a true collapse. */
 .row-panel {
-  display: none;
-  padding: 6px 16px 14px 72px;
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 150ms ease-out, opacity 150ms ease-out;
 }
 
 .row.expanded .row-panel {
-  display: block;
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.panel-inner {
+  overflow: hidden;
+  min-height: 0;
+  padding: 2px 16px 14px 72px;
 }
 
 .panel-row {
@@ -511,12 +530,24 @@ kbd {
 
 /* --- motion ------------------------------------------------------------------- */
 
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--hairline);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .eq i {
     animation: none;
     transform: scaleY(0.7);
   }
-  .icon-btn.secondary,
+  .row-panel,
   .chev svg {
     transition: none;
   }

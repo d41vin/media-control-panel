@@ -70,7 +70,7 @@ export function pagePing() {
   };
 }
 
-/** Toggle: any playing -> pause all in this frame; else play the first paused. */
+/** Toggle: any playing -> pause all in this frame; else resume what played. */
 export function pageToggle() {
   const els = (() => {
     const found = [...document.querySelectorAll('video, audio')];
@@ -85,7 +85,15 @@ export function pageToggle() {
     for (const el of playing) el.pause();
     return { acted: true, state: 'paused' };
   }
-  const target = els.find((el) => !el.ended) || els[0];
+  // resume the element most likely to be "the" media: one that actually
+  // started before, then any loaded one, then the first available — never a
+  // dead element with no sources (readyState 0)
+  const paused = els.filter((el) => el.paused && !el.ended);
+  const target =
+    paused.find((el) => el.currentTime > 0 && el.readyState >= 2) ||
+    paused.find((el) => el.readyState >= 2) ||
+    paused[0];
+  if (!target) return { acted: false };
   const p = target.play();
   if (p && typeof p.catch === 'function') p.catch(() => {});
   return { acted: true, state: 'played' };

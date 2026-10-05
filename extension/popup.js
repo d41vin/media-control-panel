@@ -117,11 +117,11 @@ function makeRow(tab) {
   playBtn.type = 'button';
   playBtn.title = 'Play / pause';
 
-  const muteBtn = el('button', 'icon-btn secondary mute');
+  const muteBtn = el('button', 'icon-btn quiet mute');
   muteBtn.type = 'button';
   muteBtn.title = 'Mute / unmute tab';
 
-  const chevBtn = el('button', 'icon-btn secondary chev');
+  const chevBtn = el('button', 'icon-btn quiet chev');
   chevBtn.type = 'button';
   chevBtn.title = 'Details';
   chevBtn.setAttribute('aria-expanded', 'false');
@@ -243,7 +243,10 @@ function buildPanel() {
   closeBtn.textContent = 'Close';
   actions.append(back10, fwd10, pip, tabBtn, pinBtn, closeBtn);
 
-  panel.append(posRow, volRow, rateRow, actions);
+  // padding lives on the inner wrapper so the 0fr collapse is a true collapse
+  const inner = el('div', 'panel-inner');
+  inner.append(posRow, volRow, rateRow, actions);
+  panel.append(inner);
   return panel;
 }
 
@@ -315,7 +318,7 @@ async function pingNow(rec) {
   if (!rec?.probe) return null;
   try {
     const results = await chrome.scripting.executeScript({
-      target: { tabId: rec.tab.id, frameId: rec.probe.primaryFrameId },
+      target: { tabId: rec.tab.id, frameIds: [rec.probe.primaryFrameId] },
       func: pagePing,
     });
     const state = results[0]?.result;
@@ -428,10 +431,11 @@ async function pauseAll() {
     rec.mediaPlaying = false;
     updateRow(rec);
     try {
-      const target = rec.probe
-        ? { tabId: rec.tab.id, frameId: rec.probe.primaryFrameId }
-        : { tabId: rec.tab.id, allFrames: true };
-      await chrome.scripting.executeScript({ target, func: pagePause });
+      // all frames: media can live in embeds outside the primary frame
+      await chrome.scripting.executeScript({
+        target: { tabId: rec.tab.id, allFrames: true },
+        func: pagePause,
+      });
     } catch {
       // tab gone; onRemoved cleans up
     }
@@ -477,7 +481,7 @@ async function exec(rec, func, args) {
   if (!rec?.probe) return null;
   try {
     const results = await chrome.scripting.executeScript({
-      target: { tabId: rec.tab.id, frameId: rec.probe.primaryFrameId },
+      target: { tabId: rec.tab.id, frameIds: [rec.probe.primaryFrameId] },
       func,
       args: [args],
     });
@@ -535,6 +539,7 @@ function updateRow(rec) {
   const titleText =
     (mediaTitle && mediaTitle !== tab.title ? mediaTitle : tab.title) || host || 'Untitled';
   nodes.title.textContent = titleText;
+  nodes.title.title = titleText; // free full-text tooltip for truncated titles
 
   const extra = rec.probe && rec.probe.elementCount > 1 ? ` · ×${rec.probe.elementCount}` : '';
   nodes.site.textContent = (host || 'system page') + extra;
@@ -608,7 +613,7 @@ async function togglePlay(rec) {
   void reorder();
   try {
     const target = rec.probe
-      ? { tabId: rec.tab.id, frameId: primaryOfProbe(rec.probe)?.frameId }
+      ? { tabId: rec.tab.id, frameIds: [primaryOfProbe(rec.probe)?.frameId] }
       : { tabId: rec.tab.id, allFrames: true };
     await chrome.scripting.executeScript({ target, func: pageToggle });
   } catch {

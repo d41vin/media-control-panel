@@ -24,6 +24,7 @@ function fakeMedia(tag, props) {
     muted: !!props.muted,
     volume: props.volume ?? 1,
     playbackRate: props.rate ?? 1,
+    readyState: props.readyState ?? 4,
     isConnected: true,
     title: props.title ?? '',
     play() {
@@ -173,6 +174,11 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
 
     scripting: {
       async executeScript({ target, func, args }) {
+        // the real API has no singular `frameId` on the target — Chrome would
+        // silently ignore it; the mock rejects so the mistake can't return
+        if ('frameId' in target) {
+          throw new Error('ScriptInjectionTarget uses frameIds: [id], not frameId');
+        }
         const runIn = (doc) => {
           const factory = new Function(
             'document',
@@ -188,7 +194,7 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
         const before = tab.audible;
         const result = target.allFrames
           ? [{ frameId: 0, result: runIn(tab._doc) }]
-          : [{ frameId: target.frameId, result: runIn(tab._doc) }];
+          : (target.frameIds ?? [0]).map((frameId) => ({ frameId, result: runIn(tab._doc) }));
         // like real Chrome, where injected play/pause flips the tab's audible
         // state and that arrives as a tabs.onUpdated event
         if (tab.audible !== before) fireUpdated(target.tabId, { audible: tab.audible });
