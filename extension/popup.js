@@ -7,6 +7,7 @@ import {
   pageProbe,
   pageToggle,
   pagePause,
+  pagePlay,
   pagePing,
   pageSeekTo,
   pageSeekBy,
@@ -118,7 +119,7 @@ function makeRow(tab) {
 
   const playBtn = el('button', 'icon-btn play');
   playBtn.type = 'button';
-  playBtn.title = 'Play / pause';
+  playBtn.title = 'Play / pause · Alt+click: solo';
 
   // Track adapters (YouTube/Spotify/SoundCloud): hidden unless the tab's site
   // has one; updateRow flips visibility as the tab navigates.
@@ -154,7 +155,7 @@ function makeRow(tab) {
   const panel = buildPanel();
   li.append(main, panel);
 
-  playBtn.addEventListener('click', () => void togglePlay(rows.get(tab.id)));
+  playBtn.addEventListener('click', (e) => void togglePlay(rows.get(tab.id), { exclusive: e.altKey }));
   prevBtn.addEventListener('click', () => void runAdapter(rows.get(tab.id), 'prev'));
   nextBtn.addEventListener('click', () => void runAdapter(rows.get(tab.id), 'next'));
   muteBtn.addEventListener('click', () => void muteTab(rows.get(tab.id)));
@@ -641,8 +642,12 @@ function targetFor(rec) {
     : { tabId: rec.tab.id, allFrames: true };
 }
 
-async function togglePlay(rec) {
+async function togglePlay(rec, { exclusive } = {}) {
   if (!rec) return;
+  if (exclusive) {
+    await playExclusive(rec);
+    return;
+  }
   rec.mediaPlaying = rec.playing ? false : true;
   updateRow(rec);
   void reorder();
@@ -654,6 +659,46 @@ async function togglePlay(rec) {
     rec.mediaPlaying = null;
     updateRow(rec);
   }
+}
+
+/**
+ * Exclusive playback, the Alt+click play: the chosen tab starts, every other
+ * playing tab pauses. The chosen tab goes first and only a landed command
+ * (the target really held playable media) triggers the pauses — an
+ * uninjectable or empty target must never silence the rest.
+ */
+async function playExclusive(rec) {
+  let played = false;
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: targetFor(rec),
+      func: pagePlay,
+    });
+    played = results[0]?.result?.acted === true;
+  } catch {
+    played = false; // uninjectable tab; the world stays as it was
+  }
+  if (!played) return;
+  rec.mediaPlaying = true;
+  updateRow(rec);
+  const jobs = [...rows.values()]
+    .filter((r) => r !== rec && r.playing)
+    .map(async (other) => {
+      other.mediaPlaying = false;
+      updateRow(other);
+      try {
+        // all frames: media can live in embeds outside the primary frame
+        await chrome.scripting.executeScript({
+          target: { tabId: other.tab.id, allFrames: true },
+          func: pagePause,
+        });
+      } catch {
+        // tab gone; onRemoved cleans up
+      }
+    });
+  await Promise.allSettled(jobs);
+  refreshChrome();
+  void reorder();
 }
 
 /** Next/previous track through the site's own player buttons. */

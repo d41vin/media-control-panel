@@ -99,6 +99,34 @@ export function pageToggle() {
   return { acted: true, state: 'played' };
 }
 
+/**
+ * Force-play the primary element — the exclusive-playback primitive. Unlike
+ * pageToggle this never pauses: if something already plays it reports that
+ * and leaves it alone.
+ */
+export function pagePlay() {
+  const els = (() => {
+    const found = [...document.querySelectorAll('video, audio')];
+    for (const el of document.querySelectorAll('*')) {
+      if (el.shadowRoot) found.push(...el.shadowRoot.querySelectorAll('video, audio'));
+    }
+    return found.filter((el) => el.isConnected);
+  })();
+  if (!els.length) return { acted: false };
+  if (els.some((el) => !el.paused && !el.ended)) return { acted: true, state: 'playing' };
+  // same resume tiers as pageToggle: an element that actually started, then
+  // any loaded one, then the first available — never a dead element
+  const paused = els.filter((el) => el.paused && !el.ended);
+  const target =
+    paused.find((el) => el.currentTime > 0 && el.readyState >= 2) ||
+    paused.find((el) => el.readyState >= 2) ||
+    paused[0];
+  if (!target) return { acted: false };
+  const p = target.play();
+  if (p && typeof p.catch === 'function') p.catch(() => {});
+  return { acted: true, state: 'played' };
+}
+
 /** Pause every playing element in this frame. No-op when nothing plays. */
 export function pagePause() {
   const els = (() => {

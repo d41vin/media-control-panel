@@ -215,6 +215,44 @@ async function main() {
     await waitFor(() => evalIn(cdp, mediaSession, `!document.querySelectorAll('audio')[0].paused`));
     ok('row play button resumes the page media');
 
+    // --- exclusive playback (Alt+click play) ---------------------------------
+    // A second media tab joins mid-session (adopted via the audible event);
+    // Alt+click on its row plays it and pauses the first tab, while a plain
+    // click on the first tab must leave the second alone.
+    const media2 = await cdp.send('Target.createTarget', {
+      url: `http://127.0.0.1:${SERVE_PORT}/test/media-page.html`,
+    });
+    const media2Session = (await cdp.send('Target.attachToTarget', { targetId: media2.targetId, flatten: true })).sessionId;
+    await waitFor(() => evalIn(cdp, media2Session, `!!document.querySelector('audio')`));
+    await evalIn(cdp, media2Session, `document.querySelectorAll('audio')[0].play()`);
+    await waitFor(() => evalIn(cdp, popupSession, `document.querySelectorAll('.row').length === 2`));
+    ok('second media tab adopted while the popup is open');
+
+    await evalIn(
+      cdp,
+      popupSession,
+      `[...document.querySelectorAll('.row')].pop()
+         .querySelector('.play')
+         .dispatchEvent(new MouseEvent('click', { bubbles: true, altKey: true }))`,
+    );
+    await waitFor(() => evalIn(cdp, mediaSession, `document.querySelectorAll('audio')[0].paused`));
+    await waitFor(() => evalIn(cdp, media2Session, `!document.querySelectorAll('audio')[0].paused`));
+    ok('Alt+click play is exclusive — the other tab pauses');
+
+    // the popup marks the exclusively-paused row; a plain click on that row
+    // resumes it without touching the still-playing one (row order after the
+    // pause is event-timing dependent, so target the .paused row, not an index)
+    await waitFor(() => evalIn(cdp, popupSession, `document.querySelectorAll('.row.paused').length === 1`));
+    await evalIn(cdp, popupSession, `document.querySelector('.row.paused .play').click()`);
+    await waitFor(() => evalIn(cdp, mediaSession, `!document.querySelectorAll('audio')[0].paused`));
+    const plainKeptSecond = await evalIn(cdp, media2Session, `!document.querySelectorAll('audio')[0].paused`);
+    plainKeptSecond
+      ? ok('plain play leaves the other tab playing')
+      : bad('plain play leaves the other tab playing', 'second tab was paused by a plain click');
+
+    await cdp.send('Target.closeTarget', { targetId: media2.targetId });
+    await waitFor(() => evalIn(cdp, popupSession, `document.querySelectorAll('.row').length === 1`));
+
     // --- expanded panel: ping, seek, volume, rate ----------------------------
     await evalIn(cdp, popupSession, `document.querySelector('.row .chev').click()`);
     let posReadout = '—';

@@ -41,6 +41,7 @@ and reopen the popup (stale assets are the #1 "it's broken" cause).
 | 28 | Keyboard: rows | Focus a row's play button, press `↓` / `↑` | Focus walks rows with a visible ring, wrapping at the ends |
 | 29 | Keyboard: seek | Expand a row, press `→` then `←` | Media skips +10 s / −10 s |
 | 30 | Keyboard vs sliders | Tab to a slider, press arrows | Slider adjusts; no ±10 s seek fires |
+| 31 | Exclusive playback | Two tabs playing → `Alt+click` play on one row | The clicked tab plays, the other pauses; nothing changes if the clicked row has no playable media |
 
 **Known caveats:** DRM sites may refuse element-level seek; closed shadow
 roots and WebAudio-only playback are invisible to every extension in this

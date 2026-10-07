@@ -26,6 +26,8 @@ target and the recently-playing list in `chrome.storage.session` (cleared when t
   with `Tab` alone.
 - **Expanded panel** — seek bar with times (or a LIVE tag on streams), ±10 s, element volume,
   playback speed 0.25×–4×, Picture-in-Picture toggle, switch to tab, pin as target, close tab.
+- **Exclusive playback** — `Alt+click` a row's play button to solo that tab: it starts and every
+  other playing tab pauses. If the chosen tab holds no playable media, nothing else is touched.
 - **Pause all / Mute all** in the header; Mute all flips to Unmute all contextually.
 - **Pinned target** — mark one tab (red index) and toggle its playback from the keyboard without
   opening the popup.
