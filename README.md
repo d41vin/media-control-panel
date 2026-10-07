@@ -17,7 +17,13 @@ target and the recently-playing list in `chrome.storage.session` (cleared when t
 - **One row per media tab** — sounding tabs, muted tabs, and recently-playing tabs show up with
   favicon, media title (from the page's media session when available), hostname and live playback
   state. Cross-origin iframes and open shadow roots are covered.
-- **Row controls** — play/pause and tab mute on every row; clicking the title switches to the tab.
+- **Row controls** — play/pause and tab mute on every row; on YouTube, Spotify
+  and SoundCloud tabs, **previous/next track** buttons click the site's own
+  player controls (adapter-gated, injected only on click); clicking the title
+  switches to the tab.
+- **Keyboard** — `↑`/`↓` move between rows, `Home`/`End` jump to first/last,
+  and `←`/`→` seek ±10 s on an expanded row. Everything also stays reachable
+  with `Tab` alone.
 - **Expanded panel** — seek bar with times (or a LIVE tag on streams), ±10 s, element volume,
   playback speed 0.25×–4×, Picture-in-Picture toggle, switch to tab, pin as target, close tab.
 - **Pause all / Mute all** in the header; Mute all flips to Unmute all contextually.

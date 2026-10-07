@@ -92,9 +92,10 @@ dirs, just the pattern:
 - **Playing glyph**: 3-bar equalizer, CSS-only, ink at 55 %, static under
   reduced-motion. **Muted tab**: struck-through speaker replaces the
   equalizer. Paused rows set their title to weight 400.
-- **Row controls**: play/pause always visible; mute + chevron visible on
-  hover/focus/expanded (desktop pointer convention; keyboard focus also
-  reveals). Everything is a real button with `aria-label`.
+- **Row controls**: play/pause always visible; on adapter sites
+  (YouTube/Spotify/SoundCloud) previous/next flank the play button;
+  mute is quiet gray, chevron full ink. Everything is a real button with
+  `aria-label`.
 - **Expanded panel** (grid label column + control column): seek with times
   (`LIVE` when duration is Infinity), volume %, speed ×, then a button row:
   ±10 s, PiP, switch to tab, pin target, close tab. Red used only on pin-when-
@@ -123,6 +124,13 @@ dirs, just the pattern:
 
 ## Motion
 
-120 ms `ease-out` on background-color, opacity, chevron rotation. Equalizer
-bars: 900 ms loop, three bars, subtle. All wrapped in
+150 ms `ease-out` on background-color, opacity, chevron rotation and the
+panel's `grid-template-rows` collapse. Equalizer bars: 900 ms loop, three
+bars, subtle. All wrapped in
 `@media (prefers-reduced-motion: no-preference)`.
+
+## Keyboard
+
+`↑`/`↓` walk rows (focus lands on the row's play button; `Tab` reaches the
+row's other controls natively), `Home`/`End` jump, and `←`/`→` seek ±10 s on
+an expanded row. While a slider has focus, `←`/`→` belong to the slider.
