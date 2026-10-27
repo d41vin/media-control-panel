@@ -198,6 +198,10 @@ function makeRow(tab) {
       closeBtn: panel.querySelector('.close'),
     },
     ping: null,
+    // play-state ordering: when a command (play/pause) last landed on this
+    // tab. Probe and ping results captured before that instant are stale and
+    // must never flip rec.mediaPlaying back — the phantom-playback guard.
+    commandAt: 0,
     dragging: false,
     volTimer: undefined,
     pendingVolume: null,
@@ -341,6 +345,7 @@ function syncPanel(rec, fresh) {
 /** One cheap pagePing on the primary frame; refreshes panel readouts. */
 async function pingNow(rec) {
   if (!rec?.probe) return null;
+  const startedAt = Date.now();
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId: rec.tab.id, frameIds: [rec.probe.primaryFrameId] },
@@ -358,8 +363,12 @@ async function pingNow(rec) {
       p.element.volume = state.volume;
       p.element.rate = state.rate;
     }
-    rec.mediaPlaying = state.playing;
-    rec.pip = !!state.pip;
+    // a ping captured before the newest command landed is stale — the
+    // command's play state outranks it (element readouts are still good)
+    if (startedAt >= rec.commandAt) {
+      rec.mediaPlaying = state.playing;
+      rec.pip = !!state.pip;
+    }
     if (!rec.dragging) updateRow(rec);
     return state;
   } catch {
@@ -461,6 +470,7 @@ async function pauseAll() {
         target: { tabId: rec.tab.id, allFrames: true },
         func: pagePause,
       });
+      rec.commandAt = Date.now();
     } catch {
       // tab gone; onRemoved cleans up
     }
@@ -653,6 +663,7 @@ async function togglePlay(rec, { exclusive } = {}) {
   void reorder();
   try {
     await chrome.scripting.executeScript({ target: targetFor(rec), func: pageToggle });
+    rec.commandAt = Date.now();
   } catch {
     // uninjectable tab (chrome://, sandboxed frame): the command never landed,
     // so fall back to the truth we know instead of the optimistic guess
@@ -680,6 +691,7 @@ async function playExclusive(rec) {
   }
   if (!played) return;
   rec.mediaPlaying = true;
+  rec.commandAt = Date.now();
   updateRow(rec);
   const jobs = [...rows.values()]
     .filter((r) => r !== rec && r.playing)
@@ -692,6 +704,7 @@ async function playExclusive(rec) {
           target: { tabId: other.tab.id, allFrames: true },
           func: pagePause,
         });
+        other.commandAt = Date.now();
       } catch {
         // tab gone; onRemoved cleans up
       }
@@ -731,7 +744,11 @@ async function muteTab(rec) {
 function applyProbe(rec, probe) {
   rec.probe = probe;
   const primary = probe ? primaryOfProbe(probe) : null;
-  rec.mediaPlaying = probe ? (primary?.element.playing ?? null) : null;
+  // A probe captured before the newest command landed is stale: the command's
+  // optimistic play state (rec.mediaPlaying) outranks it. Element data and pip
+  // stay valid either way; a null probe leaves no element truth at all.
+  const stale = !!probe && probe.at < rec.commandAt;
+  if (!stale) rec.mediaPlaying = probe ? (primary?.element.playing ?? null) : null;
   rec.pip = probe
     ? !!probe.frames.find((f) => f.frameId === rec.probe.primaryFrameId)?.pip
     : false;
@@ -739,6 +756,7 @@ function applyProbe(rec, probe) {
 }
 
 async function probeTab(rec) {
+  const startedAt = Date.now();
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId: rec.tab.id, allFrames: true },
@@ -751,7 +769,12 @@ async function probeTab(rec) {
     let elementCount = 0;
     for (const f of frames) elementCount += f.elements.length;
     const primary = primaryOfProbe({ frames });
-    return { frames, primaryFrameId: primary?.frameId ?? frames[0].frameId, elementCount };
+    return {
+      frames,
+      primaryFrameId: primary?.frameId ?? frames[0].frameId,
+      elementCount,
+      at: startedAt,
+    };
   } catch {
     return null; // discarded tab, chrome:// page, sandboxed frame
   }
