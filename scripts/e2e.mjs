@@ -450,6 +450,45 @@ async function main() {
       ? ok(`arrow key focuses a row's play button (${keyNav.rows} row(s)) — multi-row walk covered in the mock`)
       : bad('arrow key focuses a row\'s play button', JSON.stringify(keyNav));
 
+    // --- keyboard vs sliders -----------------------------------------------------------
+    // A focused range slider owns all four arrows: Up/Down adjust it in place
+    // (the row navigator used to steal them and jump focus to a play button —
+    // regression) and focus never leaves the slider. Real key events via CDP,
+    // so the input's native adjustment actually runs.
+    await evalIn(cdp, popupSession2, `document.querySelector('.row .chev').click()`);
+    await sleep(150);
+    await evalIn(
+      cdp,
+      popupSession2,
+      `(() => { const v = document.querySelector('.row .vol'); v.value = '0.5'; v.focus(); })()`,
+    );
+    const pressArrow = (key, vk) =>
+      cdp.send(
+        'Input.dispatchKeyEvent',
+        { type: 'keyDown', key, code: key, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk },
+        popupSession2,
+      );
+    const sliderState = () =>
+      evalIn(
+        cdp,
+        popupSession2,
+        `({ on: document.activeElement.className, val: parseFloat(document.querySelector('.row .vol').value) })`,
+      );
+    await pressArrow('ArrowDown', 40);
+    const afterDown = await sliderState();
+    await pressArrow('ArrowUp', 38);
+    const afterUp = await sliderState();
+    const onSlider = (s) => s.on.includes('vol');
+    afterDown.onSlider = onSlider(afterDown) && Math.abs(afterDown.val - 0.49) < 0.001;
+    afterUp.onSlider = onSlider(afterUp) && Math.abs(afterUp.val - 0.5) < 0.001;
+    afterDown.onSlider
+      ? ok('ArrowDown adjusts the focused slider, focus stays (was: row navigation stole it)')
+      : bad('ArrowDown adjusts the focused slider, focus stays', JSON.stringify(afterDown));
+    afterUp.onSlider
+      ? ok('ArrowUp adjusts the focused slider back, focus stays')
+      : bad('ArrowUp adjusts the focused slider back, focus stays', JSON.stringify(afterUp));
+    await evalIn(cdp, popupSession2, `document.activeElement.blur()`); // release dragGuard
+
     // --- commands registered ----------------------------------------------------------
     const commands = await evalIn(
       cdp,

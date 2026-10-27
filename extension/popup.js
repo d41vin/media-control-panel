@@ -851,7 +851,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 //
 // Arrows move focus between rows (landing on the row's play button; Tab then
 // reaches the row's other controls natively), Home/End jump to first/last,
-// and Left/Right seek ±10 s on an expanded row. Pure convenience over the
+// and Left/Right seek ±10 s on an expanded row. While a slider has focus,
+// all four arrows belong to the slider instead. Pure convenience over the
 // native tab order — every control stays reachable by Tab alone.
 
 function rowRecords() {
@@ -875,10 +876,12 @@ document.addEventListener('keydown', (e) => {
   const idx = recs.findIndex((r) => r.nodes.li === activeRow);
   const focusPlay = (rec) => rec?.nodes.playBtn.focus();
 
-  if (e.key === 'ArrowDown') {
+  // all four arrows belong to a focused slider (a range input adjusts with
+  // every one of them); row navigation only applies outside inputs
+  if (e.key === 'ArrowDown' && !onInput) {
     e.preventDefault();
     focusPlay(recs[idx === -1 ? 0 : (idx + 1) % recs.length]);
-  } else if (e.key === 'ArrowUp') {
+  } else if (e.key === 'ArrowUp' && !onInput) {
     e.preventDefault();
     focusPlay(recs[idx === -1 ? recs.length - 1 : (idx - 1 + recs.length) % recs.length]);
   } else if (e.key === 'Home' && !onInput) {
