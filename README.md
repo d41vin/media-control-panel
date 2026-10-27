@@ -116,5 +116,6 @@ media-control extensions do, and why this one is built the way it is.
 - Media inside closed shadow roots, DRM-protected pages and WebAudio-only playback can't be
   reached by any extension in this category (Chrome's internal media session service is not
   exposed to extensions).
-- Next/previous track requires per-site adapters; not built (roadmap).
+- Next/previous track only exists on sites with an adapter (YouTube, Spotify, SoundCloud); other
+  sites expose no next/prev control an extension could drive.
 - `chrome://` pages can be listed and muted but not play/paused — they are not injectable.
