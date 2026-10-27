@@ -101,7 +101,13 @@ dirs, just the pattern:
   ±10 s, PiP, switch to tab, pin target, close tab. Red used only on pin-when-
   active and close-tab hover (#e30613 hover = destructive affordance).
 - **Header actions**: PAUSE ALL always available; MUTE ALL label flips to
-  UNMUTE ALL contextually (all-candidate-muted → unmute).
+  UNMUTE ALL contextually (all-candidate-muted → unmute). A gear icon
+  (accent while open) toggles the settings panel between header and list.
+- **Settings panel**: three rows — label + one-line description + a sharp
+  square-knob switch (ink when on, no color). Auto-pause on open (opt-in),
+  playing-count badge, recently-playing list. Footed by "Settings are stored
+  on this device only" — the privacy statement is part of the design. `Esc`
+  closes; `inert` while closed keeps the switches out of tab order.
 - **Footer**: shortcut hints left; live target readout right (`TARGET 02 —
   youtube.com` or `TARGET NONE`).
 

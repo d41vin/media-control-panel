@@ -6,15 +6,16 @@
 // no ports, no persistent content scripts.
 
 import { pagePause, pageProbe, pageToggle } from './lib/page.js';
+import { loadSettings } from './lib/settings.js';
 
 // --- badge ---------------------------------------------------------------------
 
 let lastCount = -1;
+let badgeEnabled = true;
 
 async function updateBadge() {
   try {
-    const audible = await chrome.tabs.query({ audible: true });
-    const n = audible.length;
+    const n = badgeEnabled ? (await chrome.tabs.query({ audible: true })).length : 0;
     if (n !== lastCount) {
       lastCount = n;
       await chrome.action.setBadgeText({ text: n ? String(n) : '' });
@@ -28,8 +29,10 @@ async function updateBadge() {
 // popup opens — the behavior Chrome's media panel has. Recorded on the same
 // audible events the badge already consumes: no extra wakes.
 const RECENT_MAX = 8;
+let recentEnabled = true;
 
 async function noteRecent(tabId) {
+  if (!recentEnabled) return;
   try {
     const { recent } = await chrome.storage.session.get('recent');
     const next = [tabId, ...((recent ?? []).filter((id) => id !== tabId))].slice(0, RECENT_MAX);
@@ -63,14 +66,33 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   void pruneRecent(tabId);
 });
 
+// Settings live in storage.local; the sleeping worker wakes on the change,
+// re-reads them once, and corrects the badge immediately. Turning the recent
+// list off also wipes what was already recorded.
+async function refreshSettings() {
+  const s = await loadSettings();
+  const badgeChanged = s.badge !== badgeEnabled;
+  badgeEnabled = s.badge;
+  recentEnabled = s.recentTabs;
+  if (!s.recentTabs) void chrome.storage.session.remove('recent').catch(() => {});
+  if (badgeChanged) void updateBadge();
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.settings) void refreshSettings();
+});
+
 chrome.runtime.onInstalled.addListener(() => {
   void chrome.action.setBadgeBackgroundColor({ color: '#e30613' });
   void chrome.action.setBadgeTextColor({ color: '#ffffff' });
-  void updateBadge();
+  void refreshSettings();
 });
 
 // initial state after every worker start
-void updateBadge();
+void (async () => {
+  await refreshSettings();
+  await updateBadge();
+})();
 
 // --- keyboard commands ------------------------------------------------------------
 

@@ -107,6 +107,7 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
   const onRemoved = [];
   const storageChanged = [];
   const session = new Map(Object.entries(sessionSeed));
+  const local = new Map();
 
   const addTab = (def) => {
     const tab = fakeTab({ id: nextId++, ...def });
@@ -216,16 +217,17 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
       },
     },
 
-    storage: {
-      session: {
+    storage: (() => {
+      // session and local behave identically; onChanged carries the area name
+      const makeArea = (name, map) => ({
         async get(keys) {
-          if (typeof keys === 'string') return { [keys]: session.get(keys) };
+          if (typeof keys === 'string') return { [keys]: map.get(keys) };
           if (Array.isArray(keys)) {
-            return Object.fromEntries(keys.map((k) => [k, session.get(k)]));
+            return Object.fromEntries(keys.map((k) => [k, map.get(k)]));
           }
           if (keys && typeof keys === 'object') {
             return Object.fromEntries(
-              Object.keys(keys).map((k) => [k, session.has(k) ? session.get(k) : keys[k]]),
+              Object.keys(keys).map((k) => [k, map.has(k) ? map.get(k) : keys[k]]),
             );
           }
           return {};
@@ -233,20 +235,24 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
         async set(obj) {
           const changes = {};
           for (const [k, v] of Object.entries(obj)) {
-            changes[k] = { oldValue: session.get(k), newValue: v };
-            session.set(k, v);
+            changes[k] = { oldValue: map.get(k), newValue: v };
+            map.set(k, v);
           }
-          for (const fn of storageChanged) fn(changes, 'session');
+          for (const fn of storageChanged) fn(changes, name);
         },
         async remove(key) {
-          const oldValue = session.get(key);
-          if (!session.has(key)) return;
-          session.delete(key);
-          for (const fn of storageChanged) fn({ [key]: { oldValue } }, 'session');
+          const oldValue = map.get(key);
+          if (!map.has(key)) return;
+          map.delete(key);
+          for (const fn of storageChanged) fn({ [key]: { oldValue } }, name);
         },
-      },
-      onChanged: { addListener: (fn) => storageChanged.push(fn) },
-    },
+      });
+      return {
+        session: makeArea('session', session),
+        local: makeArea('local', local),
+        onChanged: { addListener: (fn) => storageChanged.push(fn) },
+      };
+    })(),
 
     // --- harness-only handles ----------------------------------------------
 

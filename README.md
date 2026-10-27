@@ -31,6 +31,9 @@ target and the recently-playing list in `chrome.storage.session` (cleared when t
 - **Pause all / Mute all** in the header; Mute all flips to Unmute all contextually.
 - **Pinned target** — mark one tab (red index) and toggle its playback from the keyboard without
   opening the popup.
+- **Settings** — the gear in the header opens three device-local toggles: **auto-pause on open**
+  (opt-in; opening the popup pauses every playing tab), the **playing-count badge**, and whether
+  **paused media tabs stay listed**. Stored in `chrome.storage.local`; nothing leaves the device.
 - **Keyboard commands** (remappable at `chrome://extensions/shortcuts`):
   - `Alt+Shift+Space` — play/pause the pinned target
   - `Alt+Shift+P` — pause media in every tab that has any

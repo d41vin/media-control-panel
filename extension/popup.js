@@ -16,6 +16,7 @@ import {
   pagePiP,
 } from './lib/page.js';
 import { adapterFor } from './lib/adapters.js';
+import { DEFAULT_SETTINGS, loadSettings, saveSettings } from './lib/settings.js';
 
 const listEl = document.getElementById('list');
 const emptyEl = document.getElementById('empty');
@@ -24,6 +25,13 @@ const pauseAllBtn = document.getElementById('pause-all');
 const muteAllBtn = document.getElementById('mute-all');
 const targetEl = document.getElementById('target-readout');
 const hintsEl = document.getElementById('hints');
+const settingsBtn = document.getElementById('settings-toggle');
+const settingsEl = document.getElementById('settings');
+const settingInputs = {
+  autoPauseOnOpen: document.getElementById('set-autopause'),
+  badge: document.getElementById('set-badge'),
+  recentTabs: document.getElementById('set-recent'),
+};
 
 // --- icons (our own static strings — safe for innerHTML) ---------------------
 
@@ -48,6 +56,8 @@ function icon(name) {
 /** tabId -> { tab, probe, expanded, playing, nodes } */
 const rows = new Map();
 let pinnedTabId = null;
+let settings = { ...DEFAULT_SETTINGS };
+let settingsOpen = false;
 
 // --- small helpers --------------------------------------------------------------
 
@@ -738,6 +748,33 @@ async function muteTab(rec) {
   // state arrives via tabs.onUpdated (mutedInfo)
 }
 
+// --- settings -----------------------------------------------------------------------
+
+function setSettingsOpen(open) {
+  settingsOpen = open;
+  settingsEl.classList.toggle('open', open);
+  settingsEl.toggleAttribute('inert', !open);
+  settingsBtn.setAttribute('aria-expanded', String(open));
+  settingsBtn.classList.toggle('on', open);
+}
+
+/** Turning the recent list off drops the rows that existed only because of it. */
+function pruneRecentOnlyRows() {
+  void chrome.storage.session.remove('recent').catch(() => {});
+  for (const rec of [...rows.values()]) {
+    const t = rec.tab;
+    // sound, muted, element-playing and pinned tabs earn their place on their own
+    if (!rec.playing && !t.audible && !t.mutedInfo?.muted && t.id !== pinnedTabId) {
+      removeRow(t.id);
+    }
+  }
+}
+
+async function changeSetting(key, value) {
+  settings = await saveSettings({ ...settings, [key]: value });
+  if (key === 'recentTabs' && !value) pruneRecentOnlyRows();
+}
+
 // --- probe ------------------------------------------------------------------------
 
 /** Land a probe result on a record: primary truth + pip state, then render. */
@@ -823,6 +860,11 @@ function rowRecords() {
 }
 
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && settingsOpen) {
+    e.preventDefault();
+    setSettingsOpen(false);
+    return;
+  }
   if (e.altKey || e.ctrlKey || e.metaKey) return;
   const recs = rowRecords();
   if (!recs.length) return;
@@ -886,6 +928,12 @@ async function init() {
     chrome.tabs.query({}),
     chrome.storage.session.get(['target', 'recent']).catch(() => ({})),
   ]);
+  settings = await loadSettings();
+  settingsBtn.addEventListener('click', () => setSettingsOpen(!settingsOpen));
+  for (const [key, input] of Object.entries(settingInputs)) {
+    input.checked = settings[key];
+    input.addEventListener('change', () => void changeSetting(key, input.checked));
+  }
   pinnedTabId = typeof stored.target === 'number' ? stored.target : null;
   const recentIds = Array.isArray(stored.recent)
     ? stored.recent.filter((n) => typeof n === 'number')
@@ -940,6 +988,11 @@ async function init() {
       refreshChrome();
     }),
   );
+
+  // Opt-in auto-pause, strictly after the probes settle: the pause command
+  // then can never race a probe snapshot back into phantom playing state,
+  // and the rows show what was playing the instant the popup opened.
+  if (settings.autoPauseOnOpen) await pauseAll();
   void reorder();
 }
 

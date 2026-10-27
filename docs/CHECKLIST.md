@@ -42,6 +42,10 @@ and reopen the popup (stale assets are the #1 "it's broken" cause).
 | 29 | Keyboard: seek | Expand a row, press `→` then `←` | Media skips +10 s / −10 s |
 | 30 | Keyboard vs sliders | Tab to a slider, press arrows | Slider adjusts; no ±10 s seek fires |
 | 31 | Exclusive playback | Two tabs playing → `Alt+click` play on one row | The clicked tab plays, the other pauses; nothing changes if the clicked row has no playable media |
+| 32 | Settings panel | Click the gear in the header | Panel slides open: three toggles + "stored on this device only"; `Esc` closes it |
+| 33 | Auto-pause on open | Enable the toggle, play media in a tab, reopen the popup | Every playing tab pauses as the list appears; badge drops accordingly |
+| 34 | Badge toggle | Play media, toggle the badge off / on | Badge disappears and reappears immediately, without reopening the popup |
+| 35 | Recently-playing toggle | Toggle off while paused media rows are listed | Those rows leave immediately; next open lists only sound/muted/pinned tabs |
 
 **Known caveats:** DRM sites may refuse element-level seek; closed shadow
 roots and WebAudio-only playback are invisible to every extension in this

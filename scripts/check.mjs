@@ -19,7 +19,7 @@ const fail = (msg) => {
 const ok = (msg) => console.log(`ok   ${msg}`);
 
 // 1. every JS file parses as a module
-for (const rel of ['popup.js', 'background.js', 'lib/page.js', 'lib/adapters.js']) {
+for (const rel of ['popup.js', 'background.js', 'lib/page.js', 'lib/adapters.js', 'lib/settings.js']) {
   const file = join(ext, rel);
   const r = spawnSync(process.execPath, ['--input-type=module', '--check'], {
     input: readFileSync(file),

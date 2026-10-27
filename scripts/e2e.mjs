@@ -460,12 +460,119 @@ async function main() {
       ? ok(`keyboard commands registered (${commands})`)
       : bad('keyboard commands registered', commands);
 
-    // --- no console errors in the popup -------------------------------------------------
+    // diagnostic only: capture any errors seen by this popup session before
+    // the settings section below closes it
     const popupErrors = await evalIn(
       cdp,
       popupSession2,
       `window.__errors ? window.__errors.join('|') : 'no-capture'`,
     );
+
+    // --- settings -----------------------------------------------------------------
+    // Gear opens the panel; auto-pause-on-open pauses everything on the next
+    // popup open; badge and recently-playing toggles take effect immediately.
+    await evalIn(cdp, popupSession2, `document.getElementById('settings-toggle').click()`);
+    const panelOpen = await evalIn(
+      cdp,
+      popupSession2,
+      `document.getElementById('settings').classList.contains('open') &&
+       document.getElementById('settings-toggle').getAttribute('aria-expanded') === 'true'`,
+    );
+    panelOpen ? ok('settings panel opens from the header') : bad('settings panel opens from the header', 'panel not open');
+
+    await evalIn(cdp, popupSession2, `document.getElementById('set-autopause').click()`);
+    const autoPauseStored = await evalIn(
+      cdp,
+      swSession,
+      `chrome.storage.local.get('settings').then(s => s.settings?.autoPauseOnOpen === true)`,
+      true,
+    );
+    autoPauseStored
+      ? ok('auto-pause toggle persists to storage.local')
+      : bad('auto-pause toggle persists to storage.local', JSON.stringify(autoPauseStored));
+
+    await cdp.send('Target.closeTarget', { targetId: popup2.targetId });
+    await evalIn(cdp, mediaSession, `document.querySelectorAll('audio')[0].play()`);
+    await waitFor(() => evalIn(cdp, swSession, `chrome.action.getBadgeText({}).then(t => t === '1')`));
+    const popup3 = await cdp.send('Target.createTarget', { url: `chrome-extension://${extId}/popup.html` });
+    const popupSession3 = (await cdp.send('Target.attachToTarget', { targetId: popup3.targetId, flatten: true })).sessionId;
+    await waitFor(() => evalIn(cdp, mediaSession, `document.querySelectorAll('audio')[0].paused`));
+    ok('auto-pause on open pauses playing media');
+
+    // From here on, nothing may depend on Chrome clearing tab.audible: in
+    // headless the flag can latch after an injected pause. So the badge
+    // toggles run on a throwaway audible tab, and the recent-list checks run
+    // on a never-played silent tab planted in the recent list.
+    await cdp.send('Target.closeTarget', { targetId: media.targetId });
+    const audibleTab = await cdp.send('Target.createTarget', {
+      url: `http://127.0.0.1:${SERVE_PORT}/test/media-audio.html`,
+    });
+    const audibleSession = (await cdp.send('Target.attachToTarget', { targetId: audibleTab.targetId, flatten: true })).sessionId;
+    await waitFor(() => evalIn(cdp, audibleSession, `!!document.querySelector('audio')`));
+
+    // badge toggle reacts live through the sleeping worker
+    await evalIn(cdp, audibleSession, `document.querySelector('audio').play()`);
+    await waitFor(() => evalIn(cdp, swSession, `chrome.action.getBadgeText({}).then(t => t === '1')`));
+    await evalIn(cdp, popupSession3, `document.getElementById('set-badge').click()`);
+    await waitFor(() => evalIn(cdp, swSession, `chrome.action.getBadgeText({}).then(t => t === '')`));
+    ok('badge toggle off clears the badge immediately');
+    await evalIn(cdp, popupSession3, `document.getElementById('set-badge').click()`);
+    await waitFor(() => evalIn(cdp, swSession, `chrome.action.getBadgeText({}).then(t => t === '1')`));
+    ok('badge toggle on restores the badge');
+    await cdp.send('Target.closeTarget', { targetId: audibleTab.targetId });
+
+    // A silent, never-played tab lands in the recent list only through the
+    // planted session entry — a clean stand-in for "played earlier, paused now".
+    const silentTab = await cdp.send('Target.createTarget', {
+      url: `http://127.0.0.1:${SERVE_PORT}/test/media-audio.html`,
+    });
+    const silentSession = (await cdp.send('Target.attachToTarget', { targetId: silentTab.targetId, flatten: true })).sessionId;
+    await waitFor(() => evalIn(cdp, silentSession, `!!document.querySelector('audio')`));
+    const silentTabId = await evalIn(cdp, swSession, `chrome.tabs.query({}).then(t => t.find(x => (x.url || '').includes('media-audio')).id)`, true);
+    // the pin test left the old media tab pinned; a pinned tab earns its row
+    // no matter what, so drop the pin to observe the recent list's effect alone
+    await evalIn(cdp, swSession, `chrome.storage.session.remove('target')`);
+    await evalIn(cdp, swSession, `chrome.storage.session.set({ recent: [${silentTabId}] })`);
+
+    await cdp.send('Target.closeTarget', { targetId: popup3.targetId });
+    const popup4 = await cdp.send('Target.createTarget', { url: `chrome-extension://${extId}/popup.html` });
+    const popupSession4 = (await cdp.send('Target.attachToTarget', { targetId: popup4.targetId, flatten: true })).sessionId;
+    await waitFor(() => evalIn(cdp, popupSession4, `document.querySelectorAll('.row').length === 1`));
+    const listedPaused = await evalIn(
+      cdp,
+      popupSession4,
+      `document.querySelector('.row').classList.contains('paused')`,
+    );
+    listedPaused
+      ? ok('planted silent recent tab listed (paused) while setting is on')
+      : bad('planted silent recent tab listed (paused) while setting is on', 'row not paused');
+
+    // toggling the recent list off prunes exactly such rows, live
+    await evalIn(cdp, popupSession4, `document.getElementById('set-recent').click()`);
+    await waitFor(() => evalIn(cdp, popupSession4, `document.querySelectorAll('.row').length === 0`));
+    ok('recently-playing off drops its rows immediately');
+    const recentCleared = await evalIn(
+      cdp,
+      swSession,
+      `chrome.storage.session.get('recent').then(s => !s.recent || s.recent.length === 0)`,
+      true,
+    );
+    recentCleared
+      ? ok('recent list cleared when the toggle goes off')
+      : bad('recent list cleared when the toggle goes off', 'session recent still populated');
+
+    await cdp.send('Target.closeTarget', { targetId: popup4.targetId });
+    const popup5 = await cdp.send('Target.createTarget', { url: `chrome-extension://${extId}/popup.html` });
+    const popupSession5 = (await cdp.send('Target.attachToTarget', { targetId: popup5.targetId, flatten: true })).sessionId;
+    await sleep(800);
+    const emptyWithNoRecent = await evalIn(
+      cdp,
+      popupSession5,
+      `document.getElementById('empty').hidden === false && document.querySelectorAll('.row').length === 0`,
+    );
+    emptyWithNoRecent
+      ? ok('recently-playing off leaves paused media tabs unlisted')
+      : bad('recently-playing off leaves paused media tabs unlisted', 'empty state not shown');
 
     // summary
     const failed = results.filter((r) => !r.pass).length;

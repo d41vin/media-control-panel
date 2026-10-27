@@ -445,6 +445,95 @@ input[type='range']:disabled {
   display: none;
 }
 
+/* --- settings ----------------------------------------------------------------- */
+
+/* Same collapse trick as row panels: 0fr grid row, padding on the inner
+   wrapper, so closed is a true collapse. inert while closed keeps the
+   switches out of the tab order. */
+.settings {
+  flex: none;
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 150ms ease-out, opacity 150ms ease-out;
+}
+
+.settings.open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.settings-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px 0;
+}
+
+.setting-text label {
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.setting-text p {
+  margin: 1px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* sharp Swiss switch: square track, square knob, ink when on */
+.switch {
+  flex: none;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 30px;
+  height: 16px;
+  margin: 0;
+  background: var(--paper);
+  border: 1px solid var(--faint);
+  position: relative;
+  cursor: pointer;
+}
+
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  background: var(--faint);
+  transition: left 120ms ease-out, background 120ms ease-out;
+}
+
+.switch:checked {
+  border-color: var(--ink);
+}
+
+.switch:checked::after {
+  left: 16px;
+  background: var(--ink);
+}
+
+.settings-note {
+  margin: 0;
+  padding: 10px 16px 12px;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.gear[aria-expanded='true'] {
+  color: var(--accent);
+}
+
 /* --- empty state ---------------------------------------------------------------- */
 
 .empty {
@@ -552,6 +641,8 @@ kbd {
     transform: scaleY(0.7);
   }
   .row-panel,
+  .settings,
+  .switch::after,
   .chev svg {
     transition: none;
   }
