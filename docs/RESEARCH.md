@@ -28,8 +28,10 @@ mute all) is a real gap we fill.
 What we adopt: the popup form factor, one-row-per-playing-tab, the seek bar with
 times, and the "toolbar icon shows you something is playing" affordance (our
 badge). What we skip: artwork (adds image loads; favicon carries the identity in
-less space), prev/next track (no extension API can invoke another page's media
-session handlers — only Chrome-internal code can).
+less space). Prev/next track has no extension API (nothing can invoke another
+page's media session handlers — only Chrome-internal code can), so v2.0 shipped
+without it; the later per-site adapters (`lib/adapters.js`) close that gap where
+a site exposes its own player buttons to click.
 
 ## How other extensions solve it
 
@@ -47,8 +49,9 @@ adapters (YouTube, Spotify, …) to drive player buttons. Powerful but brittle:
 every site redesign breaks them, and the adapter table is dead weight for every
 non-adapter site. We go the opposite way: generic `<video>`/`<audio>` element
 control, which works on every site that uses standard elements, with zero
-per-site code. (Trade-off recorded in the roadmap: adapter *quality* — e.g.
-next/prev track — is the one thing generic elements can't do.)
+per-site code. (That trade-off is now partially closed: `lib/adapters.js` adds
+opt-in adapter *quality* — next/prev on YouTube, Spotify and SoundCloud —
+injected only on click, so non-adapter sites carry none of the weight.)
 
 **Volume Master / boost extensions** — implement volume >100 % via
 `tabCapture` + Web Audio GainNode. `tabCapture` shows a persistent recording
@@ -59,11 +62,13 @@ covers the everyday cases at zero idle cost.
 
 **TabNoodle** — auto-pauses playing media when its popup opens. Cute, but as a
 default it punishes the common case (open popup to *check*, not to silence).
-Roadmap as an opt-in setting if ever wanted.
+Shipped here as an opt-in setting ("auto-pause on open") rather than a default.
 
 **"Media Controller" (Web Store)** — total footprint ~12 KiB. Proof that this
-category can be tiny; our budget: popup HTML+CSS+JS under ~20 KiB unpacked, no
-webfonts, no frameworks, no images beyond icons.
+category can be tiny; our starting budget: popup HTML+CSS+JS under ~20 KiB
+unpacked, no webfonts, no frameworks, no images beyond icons. (The budget was
+later relaxed as adapters, keyboard navigation and settings landed — the
+extension is ~70 KB unpacked and still holds every other line of that budget.)
 
 ## Permission research (least-privilege pass)
 
@@ -147,7 +152,7 @@ can appear until probed (probe filters them).
 - The E2E rig (`scripts/e2e.mjs`) therefore drives **Edge** (Chromium, still
   honors `--load-extension`) over raw CDP with node's built-in WebSocket:
   popup.html opened as a page behaves like the real popup with full
-  `chrome.*` context. 22 assertions, all passing.
+  `chrome.*` context. 39 assertions, all passing.
 - Edge rejects `Alt+Shift+P` (unassigned); it stays as the suggested key for
   Chrome, and every command is user-remappable.
 - A browser binary was once downloaded into this OneDrive-synced repo for

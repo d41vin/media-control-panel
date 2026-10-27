@@ -18,12 +18,16 @@ extension/
   background.js        badge count + keyboard commands; sleeps otherwise
   lib/page.js          functions injected via executeScript (probe + controls);
                        imported as source by popup & background
+  lib/adapters.js      per-site next/prev track (YouTube/Spotify/SoundCloud),
+                       injected only on click
+  lib/settings.js      shared settings model (chrome.storage.local)
   icons/               generated Swiss mark (scripts/make-icons.mjs)
 ```
 
 Data flow (no persistent content scripts anywhere):
 
-- **Detect** — `tabs.query({})` → candidates = audible ∪ muted ∪ pinned.
+- **Detect** — `tabs.query({})` → candidates = audible ∪ muted ∪ pinned ∪
+  recently-playing (session list kept by the badge worker).
 - **Probe** — one `executeScript({allFrames:true})` per candidate returns media
   elements (shadow-DOM aware) with state + frameIds.
 - **Control** — `executeScript` into the element's frame; mute via
@@ -33,6 +37,9 @@ Data flow (no persistent content scripts anywhere):
   audible/muted/removal changed, updates count only on change.
 - **Pin target** — one tab stored in `chrome.storage.session`; keyboard
   command toggles its playback without opening the popup.
+- **Settings** — one normalized object in `chrome.storage.local`
+  (`lib/settings.js`, shared by popup and background): auto-pause on open
+  (opt-in), playing-count badge, recently-playing list.
 
 ## Deliberately dropped from v0.1 (with reasons)
 
@@ -42,13 +49,21 @@ Data flow (no persistent content scripts anywhere):
   tabs expose the primary element; count shown if >1.
 - `tabs` permission, `sidePanel` permission, esbuild/TypeScript toolchain.
 
-## Roadmap (post-v2.0, in priority order)
+## Roadmap (post-v2.0)
 
-1. Site adapters for next/prev track (YouTube first) — opt-in quality layer.
-2. Exclusive playback mode (play one, pause rest).
-3. Playlist autoplay (needs injected `ended` listeners — weigh idle cost).
-4. Volume boost via tabCapture (rejected for battery; revisit as opt-in).
-5. Auto-pause-on-popup-open setting (TabNoodle idea).
+Shipped since the v2.0 release (tracked in git history):
+
+1. ~~Site adapters for next/prev track~~ — shipped: YouTube, Spotify,
+   SoundCloud (`lib/adapters.js`), injected only on click.
+2. ~~Exclusive playback mode (play one, pause rest)~~ — shipped: Alt+click a
+   row's play button.
+3. ~~Auto-pause-on-popup-open setting~~ — shipped as an opt-in setting, along
+   with the badge and recently-playing toggles (`lib/settings.js`).
+
+Still open:
+
+4. Playlist autoplay (needs injected `ended` listeners — weigh idle cost).
+5. Volume boost via tabCapture (rejected for battery; revisit as opt-in).
 
 ## Build order (one conventional commit each)
 

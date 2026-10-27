@@ -22,8 +22,9 @@ target and the recently-playing list in `chrome.storage.session` (cleared when t
   player controls (adapter-gated, injected only on click); clicking the title
   switches to the tab.
 - **Keyboard** — `↑`/`↓` move between rows, `Home`/`End` jump to first/last,
-  and `←`/`→` seek ±10 s on an expanded row. Everything also stays reachable
-  with `Tab` alone.
+  and `←`/`→` seek ±10 s on an expanded row. While a slider has focus, all four
+  arrows adjust the slider instead. Everything also stays reachable with `Tab`
+  alone.
 - **Expanded panel** — seek bar with times (or a LIVE tag on streams), ±10 s, element volume,
   playback speed 0.25×–4×, Picture-in-Picture toggle, switch to tab, pin as target, close tab.
 - **Exclusive playback** — `Alt+click` a row's play button to solo that tab: it starts and every
@@ -67,9 +68,12 @@ full command matrix.
 `npm test` runs static checks (module syntax, manifest sanity, icons, references, and a guard
 that injected functions stay serialization-safe). `npm run e2e` goes further: it launches a
 real Chromium browser (Edge via CDP — branded Chrome 137+ ignores `--load-extension`) with the
-unpacked extension loaded, opens the popup as an extension page, and drives 22 end-to-end
-assertions against the live fixture — detection, titles, play/pause/resume, seek, volume,
-speed, mute, global actions, badge, pin, reopen listing and command registration.
+unpacked extension loaded, opens the popup as an extension page, and drives 39 end-to-end
+assertions against the live fixture — detection, titles, play/pause/resume, exclusive playback,
+seek, volume, speed, mute, global actions, badge, pin, reopen listing, adapters, keyboard
+navigation (including sliders keeping their arrow keys), command registration and the settings
+toggles. `test/background-mock.html` adds 11 more assertions on the keyboard commands and badge,
+run from a browser.
 
 ## Why it's light
 
@@ -78,7 +82,8 @@ sleeping event listeners (badge + keyboard commands); the service worker goes do
 idle seconds like any MV3 worker. Detection uses `tabs.query` (audible/muted need no permission),
 control is on-demand `chrome.scripting.executeScript` only when you click something, and the seek
 bar's 1-second refresh runs only while a row is expanded **and** playing. Total unpacked size is
-under 25 KB including icons.
+about 70 KB including icons — measure with `du -sb extension` (the whole repository, docs and
+test fixtures included, is about 0.5 MB).
 
 Permissions, exactly:
 
@@ -106,9 +111,11 @@ extension/
   popup.html/css/js  the whole UI; exists only while open
   background.js    badge count + keyboard commands; sleeps otherwise
   lib/page.js      injected functions (probe/ping/toggle/pause/seek/volume/rate/PiP)
-scripts/           icon generator + static checks
-test/              mock browser, popup harness, background harness, media fixture
-docs/              RESEARCH.md (why), DESIGN.md (look), PLAN.md (roadmap)
+  lib/adapters.js  per-site next/prev track (YouTube, Spotify, SoundCloud), injected on click
+  lib/settings.js  settings model shared by popup and background (chrome.storage.local)
+scripts/           icon generator, static checks (npm test), E2E rig (npm run e2e)
+test/              chrome mock, popup harness, background harness, media fixtures
+docs/              RESEARCH.md (why), DESIGN.md (look), PLAN.md (roadmap), CHECKLIST.md (manual pass)
 ```
 
 See [docs/RESEARCH.md](docs/RESEARCH.md) for how Chrome's Global Media Controls works, what other

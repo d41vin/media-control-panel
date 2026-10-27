@@ -139,4 +139,5 @@ bars, subtle. All wrapped in
 
 `↑`/`↓` walk rows (focus lands on the row's play button; `Tab` reaches the
 row's other controls natively), `Home`/`End` jump, and `←`/`→` seek ±10 s on
-an expanded row. While a slider has focus, `←`/`→` belong to the slider.
+an expanded row. While a slider has focus, all four arrows belong to the
+slider — native adjustment, no row navigation, no ±10 s seek.

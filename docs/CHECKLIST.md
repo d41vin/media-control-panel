@@ -40,7 +40,7 @@ and reopen the popup (stale assets are the #1 "it's broken" cause).
 | 27 | Adapter persistence | On YouTube, navigate away from a video; reopen | Track buttons gone outside player context |
 | 28 | Keyboard: rows | Focus a row's play button, press `↓` / `↑` | Focus walks rows with a visible ring, wrapping at the ends |
 | 29 | Keyboard: seek | Expand a row, press `→` then `←` | Media skips +10 s / −10 s |
-| 30 | Keyboard vs sliders | Tab to a slider, press arrows | Slider adjusts; no ±10 s seek fires |
+| 30 | Keyboard vs sliders | Tab to a slider, press all four arrows | Slider adjusts with ↑ ↓ ← →; no row navigation, no ±10 s seek fires |
 | 31 | Exclusive playback | Two tabs playing → `Alt+click` play on one row | The clicked tab plays, the other pauses; nothing changes if the clicked row has no playable media |
 | 32 | Settings panel | Click the gear in the header | Panel slides open: three toggles + "stored on this device only"; `Esc` closes it |
 | 33 | Auto-pause on open | Enable the toggle, play media in a tab, reopen the popup | Every playing tab pauses as the list appears; badge drops accordingly |
