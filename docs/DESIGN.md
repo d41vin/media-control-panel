@@ -21,10 +21,14 @@ native player choices, see R5).
 |---|---|---|
 | Global speed | background worker | `storage.local` `speed` |
 | Page overrides `{[tabId]: {url, rate, at}}` | background worker | `storage.session` `speedOverrides` |
-| Policy revision (`rev`) | background worker | `storage.session` `speedRev` |
+| Policy revision per tab (`rev`) | background worker | `storage.session` `speedRevs` |
 | Committed document URL per tab | background worker | `storage.session` `speedCommitted` |
+| Committed frame documents | background worker | `storage.session` `speedFrameDocs` |
 | Managed tabs (may hold a page manager) | background worker | `storage.session` `speedManaged` |
 | Element echo suppression | page manager (in-page) | `echoCredits` + `__mcpRate` markers |
+| Player-settling window | page manager (in-page) | `settleUntil` WeakMap |
+| Boost state `{[tabId]: {gain, state}}` | background worker | `storage.session` `boosts` |
+| Settings (incl. appearance) | popup writes / worker reads | `storage.local` `settings` |
 | Popup display mirror | popup (memory + storage events) | never written by the popup |
 
 ### The policy revision (rev)
@@ -81,7 +85,11 @@ Installed (idempotent re-injection) into all frames of **every open,
 injectable tab** while enforcement is needed (global ≠ 1.00× or any override)
 — candidate detection (audible/muted/recent/pinned) cannot see a silent page
 whose media has not played yet, and the global-speed promise covers existing
-tabs. Newly navigated pages are re-synced from `tabs.onUpdated`. The whole
+tabs **and tabs created after the policy was chosen**. Every enforcement
+decision awaits the worker's startup state load (`ensureSpeedState`), so an
+event racing a fresh worker never evaluates the factory defaults and answers
+with a disconnect; `tabs.onCreated`, `tabs.onUpdated` and
+`webNavigation.onCommitted` all feed the same idempotent sync. The whole
 fan-out only runs while a policy is active; at factory defaults nothing is
 injected or polled. Disconnected everywhere when no policy remains.
 
@@ -98,26 +106,38 @@ injected or polled. Disconnected everywhere when no policy remains.
   user command (page-speed choice or reset, `adoptForeign: false`), so a
   reset reaches paused media and old override values cannot resurface after
   play/pause.
+- **R4b (player initialization is not a page choice).** Attaching a media
+  element and its `emptied`/`loadstart`/`loadedmetadata`/`loadeddata`/
+  `canplay`/`playing` events open a short (2 s) settling window. Within that
+  window a `ratechange` is the site's player initializing itself — YouTube
+  writes its own default 1.00× on every new video — so the manager re-stamps
+  the policy (both rates) and does not report it. Once the window expires, a
+  rate change is a real native/user choice and follows R5. The window is
+  event-driven and bounded; there is no polling. This is what keeps a page
+  override on the next SPA video and what keeps a newly opened tab at the
+  global speed when its player announces 1.00×.
 - Encounter rule (injection / `play`): at the expected rate → nothing; at
   1.00× (untouched default) or at a rate this extension set (`__mcpRate`) →
   apply the policy; at any other foreign rate → report it, unless the
   injection came from a per-page popup command (`adoptForeign: false`) — the
-  user's fresh choice overwrites pre-existing foreign rates.
+  user's fresh choice overwrites pre-existing foreign rates — or the element
+  is still settling (R4b), in which case the policy wins.
 - `ratechange`: own echo (echo credit + `__mcpRate` match) → consumed, no
-  report; page matched the expected rate → nothing; otherwise → report with
-  rev.
+  report; page matched the expected rate → nothing; still settling → re-stamp
+  without reporting; otherwise → report with rev.
 
 ### Report semantics and honest limits
 
 - **R5.** A ratechange report while a policy is enforced is adopted as the
   page override, with two declared limits: a change landing exactly on the
   global rate resumes inheritance (indistinguishable from inheriting), and a
-  rate a site re-applies from its own saved settings (e.g. a video site
-  reasserting the rate last chosen in its own menu on the next video) is
-  indistinguishable from a live user choice and is adopted the same way. The
-  browser exposes no source identifier for media-rate changes; the popup
-  always displays what actually happened (override vs website-set vs
-  inheriting) and reset-to-global is one click.
+  rate a site re-applies from its own saved settings after the element has
+  settled is indistinguishable from a live user choice and is adopted the
+  same way. Player initialization writes inside the settling window (R4b) are
+  excluded from this: they are setup, not intent. The browser exposes no
+  source identifier for media-rate changes; the popup always displays what
+  actually happened (override vs website-set vs inheriting) and
+  reset-to-global is one click.
 
 ### Atomicity
 
@@ -143,6 +163,66 @@ visible reset). No policy → the card shows the element's *observed* rate,
 labeled "Website-set rate" when it differs from global, and extension steps
 build from that observed rate. The popup never writes policy stores; it
 mirrors and commands.
+
+## Boost lifecycle (normative)
+
+Boost is a **tab** setting, not a document setting.
+
+- **B1.** A boost starts only from the viewed tab's card (the `activeTab`
+  grant is what `tabCapture` requires) and is keyed by `tabId` in
+  `storage.session` `boosts`. State values: `pending`, `active`, `error`.
+- **B2.** Chrome's tab-capture stream continues across navigations in the same
+  tab. SPA pushState/hash changes, full reloads, committed navigation and a
+  navigation to another origin therefore do **not** stop or restart the
+  pipeline. No navigation handler calls the boost stop path.
+- **B3.** Only an explicit reset to 100 %, tab close, or the stream ending on
+  its own stops the capture. A stop carries the per-tab request id so a
+  delayed stop from an older request cannot tear down a newer pipeline.
+- **B4.** At most one capture pipeline exists per tab: a start while one is in
+  flight is dropped (its requested gain is applied on success), and the
+  offscreen document itself refuses a second chain for the same tab.
+- **B5.** A browser restart never restores capture: `storage.session` is gone
+  and a live offscreen document is required for an `active` entry. A worker
+  restart keeps a live pipeline (the document exists) and truthfully clears
+  one that vanished.
+- **B6.** Element volume, tab mute and boost are independent controls whose
+  effects multiply at playback; moving one never changes another.
+
+## Truthful tab state (mute)
+
+The popup renders mute from `tab.mutedInfo` and never invents a state. The
+quick-mute toggle reads `chrome.tabs.get` before issuing one
+`chrome.tabs.update({muted})`, then applies the resolved Tab (the same truth
+`tabs.onUpdated` carries); Mute all does the same per row, and a focus /
+visibility return re-reads the listed tabs once. There is no extension code
+path that unmutes a tab except an explicit Mute all / shortcut action. A
+stale read that began before a mute command is discarded by the row's command
+timestamp, and `makeRow` reuses an existing record instead of appending a
+duplicate card, so the icon the user clicked is the icon that updates.
+
+## Appearance
+
+One `theme` preference (`system` | `light` | `dark`, default `system`) lives
+in `storage.local` `settings`. The popup sets `data-theme` on `<html>`:
+`system` leaves the `prefers-color-scheme` media query in charge, while
+`light`/`dark` override the token block. Every card, popover, switch, range
+control and disabled state reads the same tokens, so one attribute repaints
+the whole surface. The document's own background is the theme paper, filling
+the browser-owned square popup frame; the rounded stage/cards are the inner
+surface.
+
+## Computational rules for controls
+
+- Normal volume: 0–100 % with `step=0.05` (5 %). Pointer drag and keyboard
+  arrows snap to the same grid; the readout is the actual value.
+- Tab boost: 100–600 % with `step=10` (10 %); the readout is the actual gain.
+- Site-set element volumes are displayed truthfully even when they are not on
+  the 5 % grid; the next pointer/keyboard interaction snaps to it.
+- Site volume indicators: the extension writes the element's `volume` and the
+  browser emits the standard `volumechange`; a site that listens (the test
+  fixture does) follows with no adapter. A site with a private volume model
+  that ignores the event keeps its own display — documented, not hacked
+  around.
 
 ---
 

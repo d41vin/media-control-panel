@@ -102,6 +102,13 @@ Shipped since the v2.0 release (tracked in git history):
    (adapters, live streams), rounded popup stage (14 px body, 12 px cards),
    corrected icon semantics (mute pair vs waved volume vs speaker+plus boost,
    gauge, ±10 circular arrows), and menu-item glyphs.
+10b. ~~Manual-test fixes and final UX polish~~ — shipped (2026-11-02):
+   player-initialization settling window (new tabs and SPA video changes keep
+   the global/override policy), startup state gate + `tabs.onCreated`,
+   authoritative mute reconciliation (no duplicate cards / stale toggles),
+   tab-level boost persistence across navigation, appearance selector,
+   5 %/10 % slider steps, adapter hidden-state handling, standard-volumechange
+   fixture, and frame-gap-free theming.
 
 Still open:
 

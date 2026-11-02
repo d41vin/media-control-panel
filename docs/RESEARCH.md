@@ -491,3 +491,83 @@ e2e rig gained a frame-host fixture (same-origin iframe with its own fixture
 API) and a silent-tab dynamic-insertion scenario; it runs 91 assertions. The
 harness also filters a browser-injected `passwordalert` script error that Edge
 intermittently logs into mock pages — not our code.
+
+## Addendum — manual-test fixes (2026-11-02, third pass)
+
+**Two speed symptoms, one root cause.** The manual report had a new tab
+starting at 1.00× under a global 2.00× and a YouTube page override resetting
+to 1.00× on the next SPA video. Instrumenting a real browser showed the
+manager WAS installed at the right rate in both cases. The failure was the
+next write: YouTube's player announces its own default `playbackRate = 1`
+while taking over a video, and the manager classified that write as a native
+page choice. The worker adopted 1.00× as the page override, which then
+overwrote the global policy (new tab) or the existing override (next video).
+The manager now opens a short event-driven settling window on attach and on
+`emptied`/`loadstart`/`loadedmetadata`/`loadeddata`/`canplay`/`playing`; a
+ratechange inside it is setup, so the policy is re-stamped without a report.
+Once the window expires, native changes are adopted as before. No polling:
+the window is a timestamp checked from the existing event handlers.
+
+**New-tab timing.** The worker's event listeners can run before its async
+startup state load. A tab event racing that load used to evaluate the factory
+defaults (`globalSpeed = 1`) and answer with a disconnect; the init fan-out
+usually repaired it, but the ordering was not structural. Every enforcement
+decision now awaits a single `ensureSpeedState()` gate, and `tabs.onCreated`
+feeds the same idempotent sync, so a tab opened after the speed was chosen is
+governed from its first injectable document.
+
+**Mute investigation.** The reported 1–3 s revert was probed directly:
+headless and headed Edge, real action popup with real CDP mouse input, mute
+via the card and via `chrome.tabs.update`, sampling `chrome.tabs.get(tabId)`
+and the popup icon at 0/500/1000/3000 ms. The browser's `mutedInfo` stayed
+`{muted: true, reason: 'extension'}` and the icon stayed struck in every
+sample; the only unmute paths in the codebase are the explicit Mute all /
+`Alt+Shift+M` actions. Two latent state bugs were still worth fixing: an
+`onUpdated`-driven adoption during popup init could append a **second DOM
+card** for the same tab (the clicked card and the row record could differ),
+and the toggle was computed from the cached card state. `makeRow` now reuses
+an existing record, the toggle reads `chrome.tabs.get` first and applies the
+resolved `tabs.update` Tab, and a focus/visibility return re-reads the listed
+tabs once (event-driven, not a poll). The regression suite samples browser
+state and UI for 3 s and fails on any `muted: false` event.
+
+**Boost is a tab setting.** Navigation handlers no longer stop the pipeline;
+Chrome's tab capture continues across SPA transitions, reloads and
+cross-origin navigation, so only an explicit reset, tab close or stream end
+stops it. The request-id cancellation machinery stays for explicit stops.
+This also removed the “navigation during startup cancels” behavior: an
+in-flight start now lands after the navigation and activates.
+
+**Site volume indicators.** The popup writes `HTMLMediaElement.volume`; the
+browser fires the standard `volumechange` event. A local fixture whose site
+indicator listens only to that event follows the popup slider, proving the
+standard path needs no adapter. YouTube's own player keeps a private volume
+model and can continue showing its own percentage; there is no stable
+extension API to drive that custom UI, so the limitation is documented and
+the popup's own display remains the truthful one.
+
+**Adapters.** Site-button availability now treats hidden and `aria-hidden`
+buttons as unavailable in addition to `disabled`/`aria-disabled`. YouTube
+hides (rather than disables) its previous button on the first playlist video;
+the popup now disables its own previous control there and explains why.
+Non-adapter sites keep both controls in place and disabled.
+
+**Appearance and increments.** A `theme` preference (`system` default) lives
+in `chrome.storage.local` settings and sets `data-theme` on `<html>`; every
+token-driven surface repaints, and System falls back to `prefers-color-scheme`.
+Volume uses 5 % steps, boost 10 % steps, with the readout showing the actual
+value. The document now paints the theme paper itself (instead of a
+transparent backdrop over the square browser-owned frame), removing any
+corner gap while keeping the rounded inner cards/popovers.
+
+**Test rig.** The harness gained player-initialization re-stamp tests,
+new-tab injection, navigation-persistence and tab-close boost tests, adapter
+button-state/host tests, and a popup pass for themes, slider steps and a
+3.3 s mute window: 78 assertions (from 67). The e2e rig gained the exact
+new-tab repro, init-write re-stamp on the global and override paths, repeated
+SPA replacement, a 3 s mute sample with an unmute-event check, appearance
+persistence/rendering (including disabled controls and frame-gap geometry),
+volume keyboard steps, adapter disabled-state truth, and a `volume-sync`
+fixture; it runs 104 assertions. `verify-capture` now also checks a
+real active boost across same-origin, reload and cross-origin navigation and
+a reset after navigation.

@@ -22,14 +22,14 @@ and reopen the popup (stale assets are the #1 "it's broken" cause).
 | 6 | Exclusive playback | Two tabs playing → `Alt+click` play on one card | The clicked tab plays, the other pauses; nothing changes if the clicked card has no playable media |
 | 7 | Seek | Drag the position slider | Video jumps; readout matches the page player |
 | 8 | ±10 s | Click `−10S` / `+10S` | Page skips 10 s back/forward |
-| 9 | Volume popover | Click the speaker icon, drag the slider | Element volume follows; popover readout updates; closing and reopening shows the real value |
+| 9 | Volume popover | Click the speaker icon, drag the slider | Element volume follows in 5 % steps; popover readout matches the value; closing and reopening shows the real value; a site that listens to `volumechange` (fixture `test/volume-sync.html`) moves its own indicator |
 | 10 | LIVE | Open a live stream | Seek slider replaced by red `LIVE` tag; ±10 s disabled |
 | 11 | Multi-element | Fixture page (`npm run serve` → `localhost:8080/test/media-page.html`) | Site line shows `· ×N`; controls target the playing element |
 | 12 | Switch tab | Click a card title (or the menu's `Switch to tab`) | Jumps to that tab and focuses its window |
 | 13 | Close tab | Menu → `Close tab` | Tab closes; card disappears; badge updates |
 | 14 | PiP | Click `PIP` on a video card | Floating video window; button accent while active; click again to return. No PiP button on audio-only cards |
-| 15 | Track adapters | Open YouTube / Spotify / SoundCloud | `⏮` `⏭` flank the controls row on that card only; `⏭`/`⏮` skip tracks |
-| 16 | Tab mute | Click the speaker icon in the card head | Tab silenced **without pausing**; struck-speaker badge appears; unmute restores |
+| 15 | Track adapters | Open YouTube / Spotify / SoundCloud | `⏮` `⏭` flank the timeline on that card only; `⏭`/`⏮` skip tracks. On the first playlist video YouTube hides its prev button and the popup's `⏮` is disabled (hidden/aria-disabled/disabled all count) |
+| 16 | Tab mute | Click the speaker icon in the card head | Tab silenced **without pausing**; struck-speaker badge appears; hold for 3+ s — it stays muted, the icon stays struck, and the tab strip agrees. Unmute restores |
 | 17 | Mute all / Unmute all | Two tabs playing → `MUTE ALL` | Both muted; label flips to `UNMUTE ALL`; click restores |
 | 18 | Pause all | `PAUSE ALL` | Every playing tab pauses, embeds included |
 | 19 | Badge | Play media in two tabs | Badge shows `2`; pause both → badge disappears |
@@ -42,9 +42,9 @@ and reopen the popup (stale assets are the #1 "it's broken" cause).
 | 26 | Keyboard vs sliders | Tab to any slider, press all four arrows | Slider adjusts with ↑ ↓ ← →; no card navigation, no ±10 s seek fires |
 | 27 | Recently playing | Pause everything, close and reopen the popup | Paused media tabs stay listed (resumable) |
 | 28 | Empty state | Nothing playing | Big `0`, "NOTHING PLAYING" |
-| 29 | Dark mode | System dark mode | Ink/paper swap, same layout |
+| 29 | Appearance | Settings → Appearance: click System, Light, Dark | The whole popup repaints immediately (cards, popovers, switches, disabled controls); System is the default; the choice survives close/reopen. No theme-coloured gap around the square browser frame |
 | 30 | Cross-origin embed | Fixture page | YouTube iframe player counted and controlled |
-| 31 | Settings panel | Click the gear in the header | Panel opens: three toggles + "stored on this device only"; `Esc` closes it |
+| 31 | Settings panel | Click the gear in the header | Panel opens: Appearance + three toggles + "stored on this device only"; `Esc` closes it |
 | 32 | Auto-pause on open | Enable the toggle, play media in a tab, reopen the popup | Every playing tab pauses as the list appears; badge drops accordingly |
 | 33 | Badge toggle | Play media, toggle the badge off / on | Badge disappears and reappears immediately, without reopening the popup |
 | 34 | Recently-playing toggle | Toggle off while paused media cards are listed | Those cards leave immediately; next open lists only sound/muted/pinned tabs |
@@ -58,7 +58,8 @@ and reopen the popup (stale assets are the #1 "it's broken" cause).
 | 37 | Global stepping | Click `+` twice | `1.50×`; playing media in every inheriting tab speeds up within a second |
 | 38 | Global persistence | Set 1.50×, restart the browser, reopen | Bar shows `1.50×`; new media starts at 1.50× |
 | 39 | Applies to new media | Start a paused video with global at 1.50× | It plays at 1.50× from the start |
-| 40 | Applies to new pages | Open a fresh tab, play media | Plays at the global rate |
+| 40 | Applies to new pages | Set the global speed FIRST, then open a fresh tab and play media | Plays at the global rate from the start — the tab receives the policy on its first injectable document even though it did not exist when the speed was chosen |
+| 40b | Player announce reset | On YouTube, set global 2×, open a video (or click Next) | The video plays at 2.00×, not 1.00×: the player's own 1.00× initialization write is re-stamped, not adopted as an override |
 | 41 | Reset global | Click `↺` | Back to `1.00×`; inheriting media returns to 1.00× |
 
 ## Per-page speed overrides
@@ -77,7 +78,7 @@ and reopen the popup (stale assets are the #1 "it's broken" cause).
 | 48 | Reset to global | Click the card's `↺` | Media returns to the global rate; override marker gone |
 | 49 | Override persistence | Set an override, close/reopen the popup | Card still shows it; media still at that rate |
 | 50 | Navigation clears | With an override, navigate the tab elsewhere | Override gone; new page inherits global |
-| 50c | SPA keeps the override | On YouTube, set an override, click to another video (no full reload) | Override survives; the new video follows it — the policy belongs to the document, not the URL |
+| 50c | SPA keeps the override | On YouTube, set an override, click to another video (no full reload) | Override survives; the new video follows it — including when the player writes its own 1.00× while setting the next video up (the policy belongs to the document, not the element) |
 | 50g | Reload clears the override | Set an override, press Ctrl+R | The override is gone (a reload is a new document); the page inherits global |
 | 50h | Hash keeps the override | Set an override, follow an in-page anchor (`#section`) | The override and the applied rate survive |
 | 50i | Iframe media | Page with an embedded same-origin player; change speed with the site's control inside the frame | The card adopts the frame's rate as the page override (current frame documents are accepted) |
@@ -99,7 +100,7 @@ and reopen the popup (stale assets are the #1 "it's broken" cause).
 | 56 | 100 % stops the pipeline | Drag the active slider back to 100 % (or press Reset) | Recording indicator disappears; chip back to quiet `100%`; offscreen document released (no leftover audio graph) |
 | 57 | Distortion warning | Boost to 500–600 % | Audible distortion possible; limiter tames the worst peaks — the popover warns about this |
 | 58 | Popup close | Close the popup while boosted | Boost keeps working (offscreen owns it); reopen shows the active state truthfully |
-| 59 | Navigation stops the boost | Navigate the boosted tab (link, SPA pushState, reload) | Boost state clears immediately, indicator disappears — the boost belongs to the page it was started on |
+| 59 | Navigation keeps the boost | Start a boost, then navigate the boosted tab: a link, SPA pushState, hash change, hard reload, or a different site | Boost keeps working and the chip stays active — capture is tab-level and does not restart. Only Reset to 100 %, tab close, or the stream ending stops it |
 | 59b | Repeated use | Boost → adjust several times → reset to 100 % → boost again | Exactly one capture pipeline at a time; reset releases it fully; the restart starts a fresh capture cleanly (`npm run verify-capture` exercises this with real clicks) |
 | 59c | Cancel while starting | Drag the slider above 100 %, then immediately reset to 100 % and/or navigate the tab; repeat a few times | No orphaned capture, no audio leak, the recording indicator disappears, and a following boost start works — the UI never sticks on "starting" |
 | 59d | Toolbar invocation grants capture | Click the real toolbar icon and start boost on the viewed tab | Capture starts under the declared `activeTab` grant (this exact path — a real toolbar click — is the one automation cannot perform; `npm run verify-capture` records the programmatic refusal otherwise) |
@@ -116,13 +117,19 @@ category; `chrome://` pages can be muted but not controlled; MediaStream
 (`srcObject`) live previews cannot hold a playbackRate and are skipped by the
 speed manager; browsers may claim a suggested shortcut (Edge takes
 `Alt+Shift+P`) — remap at `chrome://extensions/shortcuts`; the speed manager
-adopts any page-originated rate change regardless of intent, including a site
-re-applying the rate last chosen in its own menu on a later video (the browser
-does not expose the difference) — the card shows what actually happened and
-the reset button is the escape hatch. Boost capture requires the `activeTab`
-grant on the target tab (declared in the manifest; a real toolbar invocation
-grants it) — starting capture on a background tab is refused by the browser,
-which is why the control is gated to the viewed tab. The popup's outer corners are rounded in
-the document (14 px body over a transparent backdrop); Chromium paints the
-action bubble from that document, so the bubble shows the same rounding —
-verify visually at `chrome://extensions` with the extension loaded.
+adopts a page-originated rate change after the media has settled, including a
+site re-applying the rate last chosen in its own menu on a later video (the
+browser does not expose the difference) — writes made while a new video is
+still initializing are treated as setup and re-stamped, so a player's own
+1.00× announcement does not clobber the policy; the card shows what actually
+happened and the reset button is the escape hatch. Boost capture requires the
+`activeTab` grant on the target tab (declared in the manifest; a real toolbar
+invocation grants it) — starting capture on a background tab is refused by the
+browser, which is why the control is gated to the viewed tab. A site that owns
+its volume UI and ignores the standard `volumechange` event (YouTube is the
+reported case) may keep showing its own volume percentage even though the
+element volume — and the sound — really changed; the popup readout and element
+volume stay truthful. The action popup's outer frame is square and
+browser-owned; the document paints the theme paper to the frame edges (no gap)
+and keeps the rounded cards/popovers inside. Verify visually with the
+extension loaded, in both themes.

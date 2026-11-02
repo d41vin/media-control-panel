@@ -10,9 +10,10 @@ nothing to compile.
 Everything is local: no accounts, no analytics, no network requests, and audio
 boost processing never leaves the device. Persistent state is the pinned target
 and the recently-playing list (`chrome.storage.session`, cleared when the
-browser closes), preferences and the global speed (`chrome.storage.local`),
-and per-page speed overrides (`chrome.storage.session`, cleared on navigation
-or browser exit).
+browser closes), preferences (including Appearance) and the global speed
+(`chrome.storage.local`), per-page speed overrides (`chrome.storage.session`,
+cleared on navigation or browser exit), and the active boost state
+(`chrome.storage.session`; never restored after a browser restart).
 
 | Light | Dark |
 |---|---|
@@ -29,9 +30,9 @@ or browser exit).
   play/pause (Alt+click solos the tab), previous/next track (YouTube, Spotify,
   SoundCloud — always in place, disabled where the site has no control, and
   mirroring the site's own disabled state where it exposes one), ±10 s,
-  Picture-in-Picture (video only), tab mute, a volume popover (0–100 %,
-  element volume), a per-page speed stepper, a tab boost chip, and an overflow
-  menu (pin target, switch to tab, close tab).
+  Picture-in-Picture (video only), tab mute, a volume popover (0–100 % in
+  5 % steps, element volume), a per-page speed stepper, a tab boost chip, and
+  an overflow menu (pin target, switch to tab, close tab).
 - **Global speed** — a speed bar under the header: 0.25×–4.00× in 0.25× steps,
   reset to 1.00×, persisted in `chrome.storage.local`. It is the default rate
   for media across tabs — including media that starts later, new pages, and
@@ -55,40 +56,49 @@ or browser exit).
 - **Native player changes are respected** — if a site's own player changes the
   playback rate (a user picking 1.5× in YouTube's menu, or site JS), the
   extension adopts that rate as the page's override instead of fighting it.
+  A player's own **initialization** write is different: YouTube (and similar
+  players) set the media to 1.00× while taking over a new video, so a short
+  event-driven settling window after attach/load/play treats those writes as
+  setup and re-applies the page policy instead of adopting 1.00×. A change
+  made once the media has settled is still adopted as the user's choice.
   This works for media inside iframes too: the manager runs per frame, and a
   report is validated against the committed document of the frame it came
   from (a current iframe document is accepted; a replaced one is rejected),
   while the override itself stays scoped to the tab's top-level document.
   Website-exact rates are preserved (1.10× stays 1.10×, never snapped to the
   0.25× grid).
-- **Tab volume boost** — amplification from 100 % (unity) to 600 % for **the
-  tab you are viewing**, built on `chrome.tabCapture` + an offscreen document
-  with a Web Audio `GainNode` and a soft limiter. The capture API's documented
-  rule is that a target tab must carry the `activeTab` grant (declared in the
-  manifest; invoking the toolbar action grants it to the tab in front of you),
-  so boost controls are enabled on that tab's card (other cards show a
-  truthful disabled state). Distinct from element volume and from tab mute;
-  moving the slider back to 100 % or pressing reset releases the whole
-  pipeline, navigating the tab — including pushState and hash changes — stops
-  the boost, and state is always truthful (no fake "active" after a browser
+- **Tab volume boost** — amplification from 100 % (unity) to 600 % in 10 %
+  steps for **the tab you are viewing**, built on `chrome.tabCapture` + an
+  offscreen document with a Web Audio `GainNode` and a soft limiter. The
+  capture API's documented rule is that a target tab must carry the
+  `activeTab` grant (declared in the manifest; invoking the toolbar action
+  grants it to the tab in front of you), so boost controls are enabled on that
+  tab's card (other cards show a truthful disabled state). Boost is a
+  **per-tab setting**: Chrome's capture stream continues across page
+  navigations, so the boost lasts through same-document SPA transitions,
+  full reloads, and even navigation to another origin until you reset it to
+  100 %, close the tab, or the stream ends. Distinct from element volume and
+  from tab mute. State is always truthful (no fake "active" after a browser
   restart or a vanished pipeline). Every capture start carries a per-tab
   **request id** checked after every asynchronous stage (offscreen creation,
   stream-id fetch, forwarding, `getUserMedia`, AudioContext init, graph
-  build): a stop, navigation, reset or restart cancels all of them, a late
-  stream is dropped (tracks stopped, no graph, no result), and stops carry the
-  request id so a delayed stop from an older request can never tear down a
-  restarted pipeline. An **end-to-end startup deadline** (12 s, armed when the
-  request begins) converges a hung capture to a truthful error. Failure paths
-  release everything: tracks, partial nodes, an unused AudioContext, pending
-  state, and the offscreen document itself when no pipeline remains (the
-  error state also closes it on its auto-clear).
+  build): a stop, reset or restart cancels all of them, a late stream is
+  dropped (tracks stopped, no graph, no result), and stops carry the request
+  id so a delayed stop from an older request can never tear down a restarted
+  pipeline. An **end-to-end startup deadline** (12 s, armed when the request
+  begins) converges a hung capture to a truthful error. Failure paths release
+  everything: tracks, partial nodes, an unused AudioContext, pending state,
+  and the offscreen document itself when no pipeline remains (the error state
+  also closes it on its auto-clear).
 - **Pause all / Mute all** in the header; Mute all flips to Unmute all
   contextually.
 - **Pinned target** — mark one tab (accent card border) and toggle its
   playback from the keyboard without opening the popup.
-- **Settings** — the gear opens three device-local toggles: **auto-pause on
-  open**, the **playing-count badge**, and whether **paused media tabs stay
-  listed**. Stored in `chrome.storage.local`; nothing leaves the device.
+- **Settings** — the gear opens device-local preferences: **Appearance**
+  (System / Light / Dark, applied immediately to the popup, cards, popovers
+  and disabled controls), **auto-pause on open**, the **playing-count badge**,
+  and whether **paused media tabs stay listed**. Stored in
+  `chrome.storage.local`; nothing leaves the device.
 - **Keyboard** — `↑`/`↓` move between cards, `Home`/`End` jump, `←`/`→` seek
   ±10 s on the focused card. While a slider has focus, all four arrows adjust
   the slider. `Esc` closes popovers and settings. Everything also stays
@@ -99,7 +109,8 @@ or browser exit).
   - `Alt+Shift+M` — mute all audible tabs / unmute what this extension muted
 - **Playing-count badge** — the toolbar icon shows how many tabs are making
   sound, like Chrome's own media icon.
-- **Dark mode** — follows the system, token swap only.
+- **Appearance** — System follows the OS/browser; Light and Dark force the
+  token set on the whole popup surface. System is the default.
 
 ## Install (unpacked)
 
@@ -125,32 +136,41 @@ command matrix plus the speed-policy and boost state machines.
 
 - `npm test` — static checks (module syntax, manifest sanity, icons, references, and a guard
   that injected functions stay serialization-safe).
-- `npm run harness` — runs both mock pages in headless Edge: 67 background assertions
+- `npm run harness` — runs both mock pages in headless Edge: 78 background assertions
   (commands, badge, speed-policy coordination including policy revisions, documentId
   scoping for SPA/reload/hash transitions and frame-aware report provenance, silent-
-  tab coverage, `defaultPlaybackRate` stamping/teardown, managed tabs, and the boost
-  state machine — real offscreen document logic against deferred `getUserMedia`/
-  AudioContext/offscreen-create stubs, covering pending-gain updates, delayed-
-  operation cancellation at every startup stage, the full-startup deadline, stale
-  request ids, restarts and failure cleanup) plus a popup smoke pass.
+  tab coverage, tabs created after the global speed is set, player-initialization
+  1.00× writes re-stamped instead of adopted, `defaultPlaybackRate` stamping/teardown,
+  managed tabs, and the boost state machine — real offscreen document logic against
+  deferred `getUserMedia`/AudioContext/offscreen-create stubs, covering pending-gain
+  updates, delayed-operation cancellation at every startup stage, the full-startup
+  deadline, stale request ids, restarts, failure cleanup, navigation persistence and
+  tab-close cleanup) plus a popup pass that checks all three appearance options,
+  the 5 %/10 % slider steps, and a 3.3 s quick-mute stability window.
 - `npm run e2e` — launches a real Chromium browser (Edge via CDP — branded Chrome 137+ ignores
   `--load-extension`) with the unpacked extension loaded, opens the popup as an extension page,
-  and drives 91 end-to-end assertions: detection, titles, play/pause/resume, exclusive playback,
-  seek, volume, the global and per-page speed policy, mute, global actions, badge, pin, boost
-  plumbing and gating, override persistence, adapters, keyboard navigation, settings — plus a
-  16-step deterministic speed-regression matrix (test/speed-suite.html, generated 180 s tones,
-  no network): global application and `defaultPlaybackRate` stamping, native-ratechange
-  adoption, SPA video changes keeping the override, reset-to-global for current and future
-  media, native 1.00×/1.10× respect and off-grid stepping, rapid global/page changes, media
-  ending mid-command, popup reopen cycles, managed tabs outside the candidate list,
-  full-navigation cleanup, same-URL reload clearing the override (documentId), hash-only
-  changes keeping both the override and the applied rate, an iframe native change adopted as
-  the page override (with child-frame navigation keeping the top-level override and top-level
-  navigation clearing it), and a silent tab receiving global speed for dynamically inserted
-  media (then returning to normal after reset).
+  and drives 104 end-to-end assertions: detection, titles, play/pause/resume, exclusive playback,
+  seek, volume, the global and per-page speed policy, mute (browser state and icon sampled over
+  3 s, with an unmute-event check), global actions, badge, pin, boost plumbing and gating,
+  override persistence, adapters (host selection plus hidden/aria-disabled/disabled/absent site
+  buttons), keyboard navigation and 5 % slider steps, settings, appearance (System/Light/Dark
+  rendering, persistence and frame-gap geometry), a standard-`volumechange` site indicator
+  fixture — plus a 16-step deterministic speed-regression matrix (test/speed-suite.html,
+  generated 180 s tones, no network): global application and `defaultPlaybackRate` stamping,
+  a tab opened AFTER the global speed is chosen, a player's 1.00× initialization write
+  re-stamped instead of adopted, native-ratechange adoption, SPA video changes keeping the
+  override through the player's next-video setup, repeated SPA replacement both under an
+  override and after reset-to-global, native 1.00×/1.10× respect and off-grid stepping, rapid
+  global/page changes, media ending mid-command, popup reopen cycles, managed tabs outside the
+  candidate list, full-navigation cleanup, same-URL reload clearing the override (documentId),
+  hash-only changes keeping both the override and the applied rate, an iframe native change
+  adopted as the page override (with child-frame navigation keeping the top-level override and
+  top-level navigation clearing it), and a silent tab receiving global speed for dynamically
+  inserted media (then returning to normal after reset).
 - `npm run verify-capture` — opens a real headed Edge window and probes what the capture API
-  actually allows (popup click flow, a reset → restart cycle with real mouse input, then raw
-  `getMediaStreamId` checks); records the outcome without asserting it.
+  actually allows (popup click flow, a reset → restart cycle with real mouse input, a real
+  active boost across same-tab and cross-origin navigation, and a reset after navigation, then
+  raw `getMediaStreamId` checks); records the outcome without asserting it.
 - `npm run shots` — regenerates the README screenshots from the real popup.
 
 ## Why it's light
@@ -160,9 +180,10 @@ keyboard commands), plus — only when a speed policy needs enforcing — event-
 page managers inside media tabs. There are still **no persistent content scripts in
 the manifest**; the speed manager is injected on demand (`chrome.scripting`) into
 media tabs **only while global speed ≠ 1.00× or a page override exists**, uses
-`ratechange`/`play` listeners and a debounced MutationObserver (no polling), and
-removes itself when no policy needs enforcing. At factory defaults (global 1.00×,
-no overrides) the idle footprint is exactly what it was before: a sleeping worker.
+`ratechange`/`play` plus load-lifecycle listeners and a debounced
+MutationObserver (no polling), and removes itself when no policy needs
+enforcing. At factory defaults (global 1.00×, no overrides) the idle footprint
+is exactly what it was before: a sleeping worker.
 The offscreen audio document for boost exists **only while at least one boost is
 active** and is torn down when the last one resets.
 
@@ -187,7 +208,7 @@ Permissions, exactly:
 No `tabs` permission — audible/muted state is free, and host permissions already unlock titles.
 `webNavigation` carries Chrome's "Read your browsing history" install warning; the extension
 listens only to top-frame commit/history events to scope speed overrides to the right document
-and to stop boosts on SPA navigations. It stores nothing about where you browse.
+(boost is tab-level and is not tied to a navigation). It stores nothing about where you browse.
 
 **Boost privacy and targeting**: tab capture starts only from your click on a specific tab's
 boost control, and the platform restricts capture targets to tabs with the `activeTab` grant —
@@ -256,15 +277,29 @@ is built the way it is.
   plays (then it is adopted or applied). A reset or a page-speed command reaches paused media
   directly; a plain global change does not clobber a paused element's site-set rate.
 - A page-originated rate change is adopted whatever its origin (user menu or site JS) — the
-  browser does not expose intent. A site re-applying the rate last chosen in its own menu on a
-  later video is indistinguishable from a live user choice and is adopted the same way. The card
-  always shows what actually happened (override / website-set / inheriting); the reset button is
-  always one click away.
+  browser does not expose intent. A short event-driven settling window after attach,
+  `loadedmetadata`/`canplay` and `play` treats writes made while a player takes over new
+  media as setup and re-applies the page policy; a change made once the media has settled
+  is adopted as a native/user choice. A site re-applying a non-default rate last chosen in
+  its own menu is indistinguishable from a live user choice and is adopted the same way.
+  The card always shows what actually happened (override / website-set / inheriting); the
+  reset button is always one click away.
 - MediaStream-backed elements (`srcObject` live previews) cannot hold an arbitrary playbackRate —
   Chromium clamps the write — so the manager skips them entirely.
+- **Site volume indicators** are owned by the site. The extension writes the media element's
+  `volume`; the browser then fires the standard `volumechange` event, which any site (including
+  the test fixture) can use to move its own slider. Sites that keep a private volume model and
+  ignore that event — YouTube's player is the reported case — will keep showing their own value.
+  There is no extension API to drive another page's custom slider, and a site-specific hack
+  would break whenever that player changes; the popup's own readout always reflects the real
+  element volume. The element volume itself is audibly applied either way.
 - Boost gain is per-tab and multiplicative with element volume and tab mute: muting the tab
-  mutes the boosted output too. High boost levels can distort; a limiter tames but does not
+  mutes the boosted output too. High boost levels may distort; a limiter tames but does not
   eliminate it.
 - While a tab is captured, the browser shows its recording indicator — that is how
-  `tabCapture` works, for every extension in this category. Boost targets are limited to the
-  viewed tab (the platform's `activeTab` rule); navigating the boosted tab stops the boost.
+  `tabCapture` works, for every extension in this category. Boost **starts** are limited to
+  the viewed tab (the platform's `activeTab` rule); once started, the capture is a tab-level
+  setting and continues across navigation until reset or tab close.
+- The action-popup frame is owned by the browser and is square on Chrome/Edge; CSS cannot
+  round it. The document paints the same theme colour to the frame, so there is no gap, and
+  the cards/popovers keep their rounded internal surface.
