@@ -414,8 +414,14 @@ async function syncSpeedEverywhere() {
 //
 // Truthful state lives in storage.session ('boosts': { [tabId]: { gain, state } })
 // and converges from every direction: capture failure, hung starts (12 s),
-// stream end, tab close, navigation away, and a missing offscreen document —
-// nothing survives a browser restart pretending capture was restored.
+// stream end, tab close, and a missing offscreen document — nothing survives
+// a browser restart pretending capture was restored.
+//
+// Boost is deliberately a TAB setting, not a document setting: Chrome's
+// tabCapture stream continues across navigations within the tab, so a boost
+// started on a tab keeps running through SPA video changes, reloads and even
+// a navigation to another origin. It ends only on an explicit reset to 100 %
+// (mcp-boost-stop), the tab closing, or the stream ending on its own.
 
 let boosts = {}; // tabId -> { gain, state: 'pending' | 'active' | 'error', error? }
 const boostStartsInFlight = new Set(); // tabIds with a capture start pending
@@ -600,7 +606,7 @@ async function reconcileBoosts(startup = false) {
   }
 }
 
-/** Stop one tab's boost from the worker side (navigation, tab removal). */
+/** Stop one tab's boost from the worker side (explicit reset, tab removal). */
 async function stopBoostForTab(tabId) {
   // cancelling the request id aborts every pending step of an in-flight
   // start (stream-id fetch, offscreen forward, in-flight getUserMedia); the
@@ -877,12 +883,11 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
     void updateBadge();
     if (info.audible === true) void noteRecent(tabId);
   }
-  // boost: the product rule is that a boost belongs to the page it was
-  // started on — ANY url change stops it. This covers ordinary navigation
-  // AND SPA/pushState transitions (both fire onUpdated with a url change).
-  // The platform itself would keep in-tab capture alive; we release it.
-  // webNavigation below is the authoritative source; this is the belt.
-  if (info.url !== undefined) void onTabNavigated(tabId);
+  // Boost is a tab-level setting: Chrome's tab capture continues across
+  // navigations within the same tab, and the product promise is that a boost
+  // started on this tab survives SPA transitions, reloads and cross-site
+  // navigation until the user resets it or the tab closes. Navigation is
+  // therefore NOT a reason to stop the pipeline here.
   // speed: media state, page identity or load completion changed — reconcile.
   // All checks before this line are memory reads; syncSpeedTab is idempotent.
   if (info.audible !== undefined || info.url !== undefined || info.status === 'complete') {
@@ -919,18 +924,15 @@ chrome.webNavigation.onCommitted.addListener((details) => {
 
 chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
   if (details.frameId !== 0 || details.tabId < 0) return;
-  // same-document transition: the page keeps its override (R2/R3), but a
-  // boost belongs to the URL it was started on — release it
-  void onTabNavigated(details.tabId);
+  // same-document transition: the page keeps its override (R2/R3), and the
+  // boost keeps running (tab-level capture)
   if (enforcementNeeded()) void syncSpeedTab(details.tabId);
 });
 
 chrome.webNavigation.onReferenceFragmentUpdated.addListener((details) => {
   if (details.frameId !== 0 || details.tabId < 0) return;
-  // hash-only change: still the same document (the override survives — this
-  // event deliberately touches no speed state), but the URL the boost was
-  // started on is gone
-  void onTabNavigated(details.tabId);
+  // hash-only change: still the same document — the override survives, and
+  // the boost survives (tab-level capture)
 });
 
 /** Record a subframe's committed document (frameId > 0). */
@@ -953,13 +955,7 @@ async function onCommittedNavigation(tabId, url, documentId) {
   if (previous && overrides[tabId] && !overrideIsCurrent(tabId)) {
     await clearOverride(tabId, false);
   }
-  await onTabNavigated(tabId);
   if (enforcementNeeded()) void syncSpeedTab(tabId, url);
-}
-
-async function onTabNavigated(tabId) {
-  if (!boosts[tabId] && !boostStartsInFlight.has(tabId)) return;
-  await stopBoostForTab(tabId);
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {

@@ -172,6 +172,7 @@ async function main() {
       findings.push(`openPopup() unavailable/rejected: ${e.message} — real-popup flow NOT verified; raw-API checks below still ran`);
     }
     if (popupOpened) {
+      try {
       const popupTarget = await waitFor(async () => {
         const { targetInfos } = await cdp.send('Target.getTargets');
         return targetInfos.find((t) => t.type === 'page' && t.url.endsWith('/popup.html'));
@@ -260,6 +261,52 @@ async function main() {
             findings.push(restart === 'active'
               ? 'VERIFIED: boost restarted after a reset (fresh capture, same popup)'
               : `NOT VERIFIED: boost restart outcome: ${restart || '(nothing)'}`);
+
+            // A boost is a TAB setting: navigation within the tab must keep
+            // the same capture pipeline running (Chrome tabCapture continues
+            // across navigations; the extension must not tear it down).
+            const boostAfterNav = async () => {
+              const raw = await evalIn(
+                cdp,
+                swSession,
+                `Promise.all([chrome.storage.session.get('boosts'), chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']})])
+                   .then(([s, cs]) => JSON.stringify({ state: s.boosts?.[${mediaTabId}]?.state, gain: s.boosts?.[${mediaTabId}]?.gain, docs: cs.length }))`,
+                true,
+              );
+              return JSON.parse(raw || '{}');
+            };
+            const boostBeforeNav = await boostAfterNav();
+            await evalIn(cdp, mediaSession, `location.href = 'http://127.0.0.1:${SERVE_PORT}/test/media-audio.html?nav=boost'`);
+            await sleep(1800);
+            const navSame = await boostAfterNav();
+            findings.push(navSame.state === 'active' && navSame.gain === boostBeforeNav.gain && navSame.docs === 1
+              ? 'VERIFIED: boost survives a full navigation in the same tab (same offscreen pipeline, same gain)'
+              : `NOT VERIFIED: boost after same-origin navigation: ${JSON.stringify({ boostBeforeNav, navSame })}`);
+            // different origin (localhost vs 127.0.0.1)
+            await evalIn(cdp, mediaSession, `location.href = 'http://localhost:${SERVE_PORT}/test/media-audio.html?nav=origin'`);
+            await sleep(1800);
+            const navCross = await boostAfterNav();
+            findings.push(navCross.state === 'active' && navCross.gain === boostBeforeNav.gain && navCross.docs === 1
+              ? 'VERIFIED: boost survives navigation to a different origin (same offscreen pipeline)'
+              : `NOT VERIFIED: boost after cross-origin navigation: ${JSON.stringify(navCross)}`);
+            // reset after navigation releases the capture
+            const resetPage = await cdp.send('Target.createTarget', { url: `chrome-extension://${extId}/popup.html` });
+            const resetSession = (await cdp.send('Target.attachToTarget', { targetId: resetPage.targetId, flatten: true })).sessionId;
+            await sleep(500);
+            await evalIn(cdp, resetSession, `chrome.runtime.sendMessage({ type: 'mcp-boost-stop', tabId: ${mediaTabId} }).catch(() => {})`, true);
+            const releasedAfterNav = await waitFor(
+              () => evalIn(
+                cdp,
+                swSession,
+                `Promise.all([chrome.storage.session.get('boosts'), chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']})])
+                   .then(([s, cs]) => !s.boosts?.[${mediaTabId}] && cs.length === 0)`,
+                true,
+              ),
+              10000,
+            ).catch(() => false);
+            findings.push(releasedAfterNav
+              ? 'VERIFIED: reset to 100% after navigation releases capture + offscreen document'
+              : 'NOT VERIFIED: reset after navigation did not release the pipeline');
           } else {
             findings.push(`NOT VERIFIED: viewed-tab capture did not start — outcome: ${outcome || '(nothing)'} (slider at ${sliderNow})`);
             const boostsDump = await evalIn(cdp, swSession, `chrome.storage.session.get('boosts').then((s) => JSON.stringify(s.boosts ?? {}))`, true);
@@ -320,6 +367,12 @@ async function main() {
           );
           findings.push(`raw getMediaStreamId for a BACKGROUND tab: ${rawBackground}`);
         }
+      }
+      } catch (e) {
+        // A real action popup can close at any moment when the environment
+        // steals focus (CI desktops, another browser window). The capture
+        // outcome up to that point is still a finding, not a setup failure.
+        findings.push(`real-popup interaction interrupted: ${e.message} — the action popup may have closed; later real-popup checks were skipped`);
       }
     }
 

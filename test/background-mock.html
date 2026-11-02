@@ -806,30 +806,58 @@
     mock.fireMessage({ type: 'mcp-boost-stop', tabId: 4 });
     await until(() => cleared(4));
 
-    // (e) navigation during startup cancels the in-flight request
+    // (e) navigation during startup does NOT cancel: boost is a TAB setting.
+    //     Chrome's capture continues across the navigation, so the in-flight
+    //     request must land and activate after the navigation commits.
     forwards = startForwards(1);
     const gateE = mock.gateCapture(1);
     mock.fireMessage({ type: 'mcp-boost-start', tabId: 1, gain: 200 });
     await until(async () => (await chrome.storage.session.get('boosts')).boosts?.[1]?.state === 'pending');
     mock.fireUpdated(1, { url: 'https://other.example/page' });
-    await until(() => cleared(1));
+    await new Promise((r) => setTimeout(r, 150));
     gateE.release();
-    await new Promise((r) => setTimeout(r, 200));
-    assert('navigation during startup cancels the request (no forward after release)',
-      startForwards(1) === forwards && (await cleared(1)),
-      `forwards=${startForwards(1)}/${forwards}`);
+    gumBefore = gumCalls.length;
+    await until(() => gumCalls.length > gumBefore);
+    gumCalls[gumCalls.length - 1].resolve();
+    await until(async () => (await chrome.storage.session.get('boosts')).boosts?.[1]?.state === 'active');
+    assert('navigation during startup does not cancel the boost (tab-level capture)',
+      (await chrome.storage.session.get('boosts')).boosts?.[1]?.state === 'active' &&
+        startForwards(1) === forwards + 1,
+      `forwards=${startForwards(1)}/${forwards} boosts=${JSON.stringify((await chrome.storage.session.get('boosts')).boosts)}`);
+    mock.fireMessage({ type: 'mcp-boost-stop', tabId: 1 });
+    await until(() => cleared(1));
 
-    // (f) hash-only navigation stops an ACTIVE boost (onReferenceFragmentUpdated)
+    // (f) ALL navigation kinds keep an ACTIVE boost: hash-only, committed,
+    //     SPA pushState, and a hard reload of the same URL. Nothing starts a
+    //     second pipeline, and no stop is sent.
     mock.fireMessage({ type: 'mcp-boost-start', tabId: 4, gain: 200 });
     gumBefore = gumCalls.length;
     await until(() => gumCalls.length > gumBefore);
     gumCalls[gumCalls.length - 1].resolve();
     await until(async () => (await chrome.storage.session.get('boosts')).boosts?.[4]?.state === 'active');
+    const forwardsAtStart = startForwards(4);
+    const stopsAtStart = offscreenMsgs.filter((m) => m.tabId === 4 && m.type === 'mcp-boost-offscreen-stop').length;
     mock.fireReferenceFragment(4, 'https://site.example/watch?v=1#t=42');
+    await new Promise((r) => setTimeout(r, 250));
+    const afterHash = (await chrome.storage.session.get('boosts')).boosts?.[4]?.state;
+    mock.fireCommitted(4, 'https://other.example/watch?v=2', 'doc-boost-1');
+    await new Promise((r) => setTimeout(r, 250));
+    const afterCommit = (await chrome.storage.session.get('boosts')).boosts?.[4]?.state;
+    mock.fireHistoryState(4, 'https://other.example/watch?v=3');
+    await new Promise((r) => setTimeout(r, 250));
+    const afterSpa = (await chrome.storage.session.get('boosts')).boosts?.[4]?.state;
+    mock.fireCommitted(4, 'https://other.example/watch?v=3', 'doc-boost-2');
+    await new Promise((r) => setTimeout(r, 250));
+    const afterReload = (await chrome.storage.session.get('boosts')).boosts?.[4]?.state;
+    const stopsAfter = offscreenMsgs.filter((m) => m.tabId === 4 && m.type === 'mcp-boost-offscreen-stop').length;
+    assert('boost survives hash, committed, SPA and reload navigation in the same tab',
+      afterHash === 'active' && afterCommit === 'active' && afterSpa === 'active' && afterReload === 'active',
+      `states=${JSON.stringify([afterHash, afterCommit, afterSpa, afterReload])}`);
+    assert('navigation never restarts or tears down the capture pipeline',
+      startForwards(4) === forwardsAtStart && stopsAfter === stopsAtStart,
+      `forwards=${startForwards(4)}/${forwardsAtStart} stops=${stopsAfter}/${stopsAtStart}`);
+    mock.fireMessage({ type: 'mcp-boost-stop', tabId: 4 });
     await until(() => cleared(4));
-    assert('hash-only navigation stops the boost (same document, URL gone)',
-      await cleared(4) && offscreenMsgs.some((m) => m.tabId === 4 && m.type === 'mcp-boost-offscreen-stop'),
-      'boost survived a hash change');
 
     // --- boost: full-startup deadline + the remaining cancellation gaps -------------
     // (g) cancellation while the OFFSCREEN DOCUMENT is being created: no
@@ -911,17 +939,28 @@
       ctxRaceCall.track.stopped === true && boostResults.length === resultsBeforeCtxRace,
       `trackStopped=${ctxRaceCall.track.stopped} results=${boostResults.length}/${resultsBeforeCtxRace}`);
 
-    // --- navigation stops the boost ---------------------------------------------------
-    const navForwards = startForwards(4);
-    mock.fireMessage({ type: 'mcp-boost-start', tabId: 4, gain: 200 });
-    await until(() => startForwards(4) === navForwards + 1);
+    // --- tab close stops the boost (the only implicit stop) ---------------------
+    // Boost is tab-level, but it must not outlive its tab: closing the tab
+    // releases the capture and clears the truthful state.
+    const closeTab = mock.addTab({
+      title: 'Boost close target',
+      url: 'https://close.example/watch',
+      elements: [{ tag: 'VIDEO', playing: true, time: 0, duration: 300 }],
+    });
+    const closeId = closeTab.id;
+    const closeForwards = startForwards(closeId);
+    mock.fireMessage({ type: 'mcp-boost-start', tabId: closeId, gain: 200 });
+    await until(() => startForwards(closeId) === closeForwards + 1);
+    gumBefore = gumCalls.length;
+    await until(() => gumCalls.length > gumBefore);
     gumCalls[gumCalls.length - 1].resolve();
-    await until(async () => (await chrome.storage.session.get('boosts')).boosts?.[4]?.state === 'active');
-    mock.fireUpdated(4, { url: 'https://other.example/page' });
-    await until(() => cleared(4));
-    assert('navigation to a different URL stops the boost (worker-initiated stop)',
-      await cleared(4) && offscreenMsgs.some((m) => m.tabId === 4 && m.type === 'mcp-boost-offscreen-stop'),
-      'boost survived navigation');
+    await until(async () => (await chrome.storage.session.get('boosts')).boosts?.[closeId]?.state === 'active');
+    await chrome.tabs.remove(closeId);
+    await until(() => cleared(closeId));
+    assert('closing the boosted tab releases the capture and clears the state',
+      await cleared(closeId) &&
+        offscreenMsgs.some((m) => m.tabId === closeId && m.type === 'mcp-boost-offscreen-stop'),
+      'boost outlived its tab');
 
     // --- lifecycle reconciliation: pipeline gone → state cleared ----------------------
     mock.fireMessage({ type: 'mcp-boost-start', tabId: 1, gain: 250 });
