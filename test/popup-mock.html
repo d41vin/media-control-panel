@@ -5,7 +5,7 @@
   <title>Media Control — popup mock harness</title>
   <link rel="stylesheet" href="../extension/popup.css" />
   <style>
-    /* The real popup.css styles body as the 380px popup; in the harness the
+    /* The real popup.css styles body as the 440px popup; in the harness the
        popup lives in a frame next to the fake-browser controls. */
     body {
       width: auto;
@@ -17,10 +17,12 @@
       background: #7a7a7a;
     }
     .popup-frame {
-      width: 380px;
-      max-height: 560px;
+      width: 440px;
+      max-height: 640px;
       display: flex;
       flex-direction: column;
+      overflow: hidden;
+      border-radius: 14px;
       background: var(--paper);
       color: var(--ink);
       font-family: 'Helvetica Neue', Helvetica, Arial, 'Segoe UI', system-ui, sans-serif;
@@ -30,12 +32,14 @@
     }
     .popup-frame.light {
       --paper: #ffffff;
+      --card: #ffffff;
       --ink: #111111;
       --muted: #6f6f6f;
       --faint: #b5b5b5;
       --hairline: #e4e4e4;
       --hover: #f4f4f4;
       --accent: #e30613;
+      --art-badge: rgba(255, 255, 255, 0.88);
     }
     .controls {
       font: 13px/1.6 system-ui, sans-serif;
@@ -69,6 +73,20 @@
       </button>
     </div>
   </header>
+
+  <section class="speedbar" aria-label="Global playback speed">
+    <span class="speedbar-label">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a9 9 0 0 0-9 9c0 2.2.8 4.2 2.1 5.8l1.5-1.3A6.9 6.9 0 0 1 5.1 13 6.9 6.9 0 1 1 17 18.4l1.4 1.5A9 9 0 0 0 12 4z"/><path d="m12.9 14.6-5.2-5.4 1.5-1.4 5 5.3a1.7 1.7 0 1 1-1.3 1.5z"/></svg>
+      Speed
+    </span>
+    <span id="gspeed-note" class="speedbar-note" hidden></span>
+    <div class="speedbar-cluster">
+      <button id="gspeed-dec" class="step-btn" type="button" title="Decrease global speed by 0.25&times;" aria-label="Decrease global speed">&minus;</button>
+      <span id="gspeed-value" class="speedbar-value" aria-live="polite">1.00&times;</span>
+      <button id="gspeed-inc" class="step-btn" type="button" title="Increase global speed by 0.25&times;" aria-label="Increase global speed">+</button>
+      <button id="gspeed-reset" class="step-btn reset" type="button" title="Reset global speed to 1.00&times;" aria-label="Reset global speed to 1.00&times;">&#8634;</button>
+    </div>
+  </section>
 
   <section id="settings" class="settings" inert>
     <div class="settings-inner">
@@ -131,6 +149,7 @@
       title: 'Big Buck Bunny — YouTube',
       url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ',
       favicon: faviconSvg('Y', '#f00'),
+      active: true, // the viewed tab — boost starts are offered here
       siteButtons: {
         '.ytp-next-button': 'next',
         '.ytp-prev-button': 'prev',
@@ -159,6 +178,83 @@
       url: 'chrome://media-app',
       injectable: false,
       elements: [{ tag: 'AUDIO', playing: true, time: 5, duration: -1 }],
+    });
+
+    // --- fake background: speed policy + boost ---------------------------------
+    // Stands in for the service worker + page managers: applies chosen rates
+    // to the fake elements and keeps storage.session truth. Deliberately
+    // simple — the real enforcement logic is covered by background-mock and
+    // the E2E rig; this harness exercises the POPUP against realistic state.
+
+    let globalSpeed = 1;
+    const rateFor = async (tabId) => {
+      const { speedOverrides } = await chrome.storage.session.get('speedOverrides');
+      const ov = speedOverrides?.[tabId];
+      return ov ? ov.rate : globalSpeed;
+    };
+    const applyRate = async (tabId) => {
+      const t = mock.tabs.get(tabId);
+      if (!t || t._injectable === false) return;
+      const rate = await rateFor(tabId);
+      for (const el of t._elements) el.playbackRate = rate;
+    };
+    const applyAll = async () => {
+      for (const id of mock.tabs.keys()) await applyRate(id);
+    };
+
+    chrome.runtime.onMessage.addListener((msg) => {
+      void (async () => {
+        if (!msg || typeof msg.type !== 'string') return;
+        if (msg.type === 'mcp-speed-page') {
+          const { speedOverrides } = await chrome.storage.session.get('speedOverrides');
+          const map = speedOverrides ?? {};
+          map[msg.tabId] = { url: mock.tabs.get(msg.tabId)?.url, rate: msg.rate, at: Date.now() };
+          await chrome.storage.session.set({ speedOverrides: map });
+          await applyRate(msg.tabId);
+        } else if (msg.type === 'mcp-speed-reset') {
+          const { speedOverrides } = await chrome.storage.session.get('speedOverrides');
+          if (speedOverrides?.[msg.tabId]) {
+            const map = { ...speedOverrides };
+            delete map[msg.tabId];
+            await chrome.storage.session.set({ speedOverrides: map });
+          }
+          await applyRate(msg.tabId);
+        } else if (msg.type === 'mcp-boost-start') {
+          // simulate the worker's capture flow: the tab is "capturable", so
+          // the start succeeds and the pipeline reports active
+          const map = await boostsMap();
+          map[msg.tabId] = { gain: msg.gain, state: 'pending' };
+          await chrome.storage.session.set({ boosts: map });
+          await new Promise((r) => setTimeout(r, 60));
+          const cur = await boostsMap();
+          if (cur[msg.tabId]?.state === 'pending') {
+            cur[msg.tabId] = { gain: msg.gain, state: 'active' };
+            await chrome.storage.session.set({ boosts: cur });
+          }
+        } else if (msg.type === 'mcp-boost-gain') {
+          const map = await boostsMap();
+          if (map[msg.tabId] && map[msg.tabId].state !== 'error') {
+            map[msg.tabId] = { ...map[msg.tabId], gain: msg.gain };
+            await chrome.storage.session.set({ boosts: map });
+          }
+        } else if (msg.type === 'mcp-boost-stop') {
+          const map = await boostsMap();
+          delete map[msg.tabId];
+          await chrome.storage.session.set({ boosts: map });
+        }
+      })().catch(() => {});
+    });
+
+    async function boostsMap() {
+      const { boosts } = await chrome.storage.session.get('boosts');
+      return boosts ?? {};
+    }
+
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && changes.speed) {
+        globalSpeed = changes.speed.newValue;
+        void applyAll();
+      }
     });
 
     // harness controls ---------------------------------------------------------

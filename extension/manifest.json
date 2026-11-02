@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Media Control Panel",
-  "version": "2.0.0",
-  "description": "A Swiss-minimal command center for every tab playing media — play, pause, seek, volume, speed, mute — like Chrome's own media panel.",
+  "version": "2.1.0",
+  "description": "Every tab playing media in one popup — play, pause, seek, volume, global and per-page speed, tab boost, mute.",
   "minimum_chrome_version": "116",
-  "permissions": ["scripting", "storage"],
+  "permissions": ["scripting", "storage", "activeTab", "tabCapture", "offscreen", "webNavigation"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js",

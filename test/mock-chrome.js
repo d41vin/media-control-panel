@@ -24,9 +24,21 @@ function fakeMedia(tag, props) {
     muted: !!props.muted,
     volume: props.volume ?? 1,
     playbackRate: props.rate ?? 1,
+    defaultPlaybackRate: props.defaultRate ?? 1,
     readyState: props.readyState ?? 4,
     isConnected: true,
     title: props.title ?? '',
+    // minimal EventTarget surface so injected listeners (speed manager) attach
+    _listeners: {},
+    addEventListener(type, fn) {
+      (this._listeners[type] ??= []).push(fn);
+    },
+    removeEventListener(type, fn) {
+      this._listeners[type] = (this._listeners[type] ?? []).filter((f) => f !== fn);
+    },
+    dispatch(type) {
+      for (const fn of this._listeners[type] ?? []) fn({ target: this });
+    },
     play() {
       this.paused = false;
       return Promise.resolve();
@@ -52,6 +64,7 @@ function fakeTab(def) {
     url: def.url,
     favIconUrl: def.favicon ?? null,
     audible: false,
+    active: !!def.active,
     mutedInfo: def.muted ? { muted: true, reason: 'extension' } : { muted: false, reason: '' },
     // harness-only handles
     _elements: elements,
@@ -64,6 +77,9 @@ function fakeTab(def) {
       const els = this._elements;
       const tabRef = this;
       return {
+        // a REAL detached node: injected managers observe it with the page's
+        // genuine MutationObserver, which rejects plain-object stand-ins
+        documentElement: document.createElement('div'),
         querySelectorAll(sel) {
           if (sel === 'video, audio' || sel === 'video') {
             return els.filter((el) => (sel === 'video' ? el.tagName === 'VIDEO' : true));
@@ -105,9 +121,18 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
   let nextId = 1;
   const onUpdated = [];
   const onRemoved = [];
+  const onActivated = [];
   const storageChanged = [];
+  const runtimeMessageHandlers = [];
+  const onCommitted = [];
+  const onHistoryState = [];
+  const onReferenceFragment = [];
+  let docIdSeq = 0;
   const session = new Map(Object.entries(sessionSeed));
   const local = new Map();
+  // extension API call logs — the background harness asserts on these
+  const scriptingCalls = [];
+  const sentTabMessages = [];
 
   const addTab = (def) => {
     const tab = fakeTab({ id: nextId++, ...def });
@@ -151,6 +176,63 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
           onInstalledHandlers.push(fn);
         },
       },
+      onMessage: {
+        addListener(fn) {
+          runtimeMessageHandlers.push(fn);
+        },
+        removeListener(fn) {
+          const i = runtimeMessageHandlers.indexOf(fn);
+          if (i !== -1) runtimeMessageHandlers.splice(i, 1);
+        },
+      },
+      /**
+       * Broadcast to every listener registered in this context. Handlers must
+       * filter by msg.type — the mock, like the real bus, does not route.
+       */
+      async sendMessage(msg) {
+        for (const fn of [...runtimeMessageHandlers]) {
+          await fn(msg, {
+            id: 'mock-extension',
+            tab: msg.__senderTab,
+            documentId: msg.__senderDocId,
+            frameId: msg.__senderFrameId ?? 0,
+          });
+        }
+      },
+      async getContexts({ contextTypes } = {}) {
+        if (contextTypes?.includes('OFFSCREEN_DOCUMENT') && chrome.offscreen._created > chrome.offscreen._closed) {
+          return [{ contextType: 'OFFSCREEN_DOCUMENT' }];
+        }
+        return [];
+      },
+    },
+
+    offscreen: {
+      _created: 0,
+      _closed: 0,
+      async createDocument() {
+        // a test-installed gate holds creation open so a cancellation during
+        // offscreen-document setup can be exercised deterministically
+        const gate = chrome._mock.offscreenCreateGate;
+        if (gate) await gate;
+        this._created++;
+      },
+      async closeDocument() {
+        this._closed++;
+      },
+    },
+
+    tabCapture: {
+      async getMediaStreamId({ targetTabId } = {}) {
+        const t = tabs.get(targetTabId);
+        if (!t) throw new Error('No tab with id');
+        if (t._injectable === false) throw new Error('Cannot capture this tab');
+        // a test-installed gate holds the resolution open so cancellation
+        // paths can be exercised deterministically
+        const gate = chrome._mock.tabCaptureGates.get(targetTabId);
+        if (gate) await gate;
+        return `mock-stream-${targetTabId}`;
+      },
     },
 
     tabs: {
@@ -158,6 +240,7 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
         return [...tabs.values()]
           .filter((t) => filter.audible === undefined || t.audible === filter.audible)
           .filter((t) => filter.muted === undefined || !!t.mutedInfo?.muted === filter.muted)
+          .filter((t) => filter.active === undefined || !!t.active === filter.active)
           .map((t) => ({ ...t }));
       },
       async get(id) {
@@ -172,6 +255,10 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
           t.mutedInfo = { muted: props.muted, reason: 'extension' };
           fireUpdated(id, { mutedInfo: t.mutedInfo, audible: t.audible });
         }
+        if (props.active === true && !t.active) {
+          for (const other of tabs.values()) other.active = other.id === id;
+          for (const fn of onActivated) fn({ tabId: id, windowId: t.windowId });
+        }
         return { ...t };
       },
       async remove(id) {
@@ -179,16 +266,28 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
         tabs.delete(id);
         for (const fn of onRemoved) fn(id);
       },
+      async sendMessage(tabId, msg) {
+        // no page-level managers exist in the mock; record for assertions
+        sentTabMessages.push({ tabId, msg });
+      },
       onUpdated: { addListener: (fn) => onUpdated.push(fn) },
       onRemoved: { addListener: (fn) => onRemoved.push(fn) },
+      onActivated: { addListener: (fn) => onActivated.push(fn) },
     },
 
     windows: {
       async update() {},
     },
 
+    webNavigation: {
+      onCommitted: { addListener: (fn) => onCommitted.push(fn) },
+      onHistoryStateUpdated: { addListener: (fn) => onHistoryState.push(fn) },
+      onReferenceFragmentUpdated: { addListener: (fn) => onReferenceFragment.push(fn) },
+    },
+
     scripting: {
       async executeScript({ target, func, args }) {
+        scriptingCalls.push({ target: { ...target }, func: func?.name ?? 'anonymous', args });
         // the real API has no singular `frameId` on the target — Chrome would
         // silently ignore it; the mock rejects so the mistake can't return
         if ('frameId' in target) {
@@ -260,6 +359,96 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
       tabs,
       addTab,
       fireUpdated,
+      scriptingCalls,
+      sentTabMessages,
+      /** Deliver a runtime message as if it came from an extension context. */
+      fireMessage(msg, sender = {}) {
+        return chrome.runtime.sendMessage({ ...msg, __senderTab: sender.tab });
+      },
+      /** Deliver a runtime message as if it came from inside a tab. */
+      fireMessageFromTab(msg, tabId, documentId, frameId = 0) {
+        const t = tabs.get(tabId);
+        return chrome.runtime.sendMessage({
+          ...msg,
+          __senderTab: t ? { id: t.id, url: t.url } : undefined,
+          __senderDocId: documentId ?? t?._committedDocId,
+          __senderFrameId: frameId,
+        });
+      },
+      fireActivated(tabId) {
+        for (const other of tabs.values()) other.active = other.id === tabId;
+        for (const fn of onActivated) fn({ tabId, windowId: 1 });
+      },
+      /**
+       * A full top-level navigation commits: the tab's URL becomes `url` and
+       * the committed document gets a fresh documentId (Chrome's identity —
+       * a same-URL reload changes it). Pass `documentId` to pin one.
+       */
+      fireCommitted(tabId, url, documentId) {
+        const t = tabs.get(tabId);
+        const docId = documentId ?? `doc-${++docIdSeq}`;
+        if (t) {
+          t.url = url;
+          t._committedDocId = docId;
+        }
+        for (const fn of onCommitted) fn({ tabId, frameId: 0, url, documentId: docId, transitionType: 'link' });
+      },
+      /** A same-document SPA transition: URL changes, document does not. */
+      fireHistoryState(tabId, url) {
+        const t = tabs.get(tabId);
+        if (t) t.url = url;
+        for (const fn of onHistoryState) fn({ tabId, frameId: 0, url });
+      },
+      /**
+       * A subframe's document commits: record its identity WITHOUT touching
+       * the tab URL (the top-level page is unchanged).
+       */
+      fireFrameCommitted(tabId, frameId, url, documentId) {
+        const docId = documentId ?? `doc-${++docIdSeq}`;
+        for (const fn of onCommitted) fn({ tabId, frameId, url, documentId: docId, transitionType: 'auto_subframe' });
+      },
+      /** A hash-only change: URL changes, document does not. */
+      fireReferenceFragment(tabId, url) {
+        const t = tabs.get(tabId);
+        if (t) t.url = url;
+        for (const fn of onReferenceFragment) fn({ tabId, frameId: 0, url });
+      },
+      /**
+       * Hold getMediaStreamId for a tab open until `release()` is called —
+       * the deterministic way to test cancellation mid-startup.
+       */
+      gateCapture(tabId) {
+        let release;
+        const promise = new Promise((r) => {
+          release = r;
+        });
+        this.tabCaptureGates.set(tabId, promise);
+        return {
+          release: () => {
+            this.tabCaptureGates.delete(tabId);
+            release();
+          },
+        };
+      },
+      /**
+       * Hold offscreen-document creation open until `release()` is called —
+       * the deterministic way to test a cancellation during document setup.
+       */
+      gateOffscreenCreate() {
+        let release;
+        const promise = new Promise((r) => {
+          release = r;
+        });
+        this.offscreenCreateGate = promise;
+        return {
+          release: () => {
+            this.offscreenCreateGate = null;
+            release();
+          },
+        };
+      },
+      offscreenCreateGate: null,
+      tabCaptureGates: new Map(),
       fireCommand(command) {
         for (const fn of commandHandlers) fn(command);
       },

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Frame Host</title>
+    <style>
+      body { font: 14px/1.5 system-ui, sans-serif; margin: 24px; }
+      iframe { width: 420px; height: 260px; border: 1px solid #ccc; }
+    </style>
+  </head>
+  <body>
+    <h1>Frame host — media lives in a subframe</h1>
+    <p>The speed manager is injected into every frame; reports from the
+      current iframe document must be accepted. This page exposes the
+      same-origin iframe's fixture API for the end-to-end rig.</p>
+    <iframe id="media-frame" src="speed-suite.html?t=FRAME"></iframe>
+    <script>
+      window.mcpFrame = () => document.getElementById('media-frame').contentWindow.mcpFix;
+      window.mcpFrameNav = (src) => {
+        document.getElementById('media-frame').src = src;
+      };
+    </script>
+  </body>
+</html>

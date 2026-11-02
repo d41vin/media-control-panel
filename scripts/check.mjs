@@ -19,7 +19,16 @@ const fail = (msg) => {
 const ok = (msg) => console.log(`ok   ${msg}`);
 
 // 1. every JS file parses as a module
-for (const rel of ['popup.js', 'background.js', 'lib/page.js', 'lib/adapters.js', 'lib/settings.js']) {
+for (const rel of [
+  'popup.js',
+  'background.js',
+  'lib/page.js',
+  'lib/adapters.js',
+  'lib/settings.js',
+  'lib/speed.js',
+  'lib/manager.js',
+  'offscreen.js',
+]) {
   const file = join(ext, rel);
   const r = spawnSync(process.execPath, ['--input-type=module', '--check'], {
     input: readFileSync(file),
@@ -45,6 +54,10 @@ for (const key of ['permissions', 'host_permissions', 'action', 'background', 'c
   if (!(key in manifest)) fail(`manifest missing ${key}`);
 }
 ok('manifest keys present');
+for (const p of ['scripting', 'storage', 'activeTab', 'tabCapture', 'offscreen', 'webNavigation']) {
+  if (!manifest.permissions.includes(p)) fail(`manifest missing ${p} permission`);
+}
+ok('speed/boost/navigation permissions present (scripting, storage, activeTab, tabCapture, offscreen, webNavigation)');
 if (manifest.permissions.includes('tabs')) fail('tabs permission should not be needed');
 else ok('no tabs permission');
 if (manifest.permissions.includes('sidePanel')) fail('sidePanel permission should be gone');
@@ -54,10 +67,13 @@ else ok('no persistent content scripts');
 if (manifest.action.default_popup !== 'popup.html') fail('action popup path');
 
 // 3. referenced files exist
-for (const p of [manifest.action.default_popup, manifest.background.service_worker]) {
+for (const p of [manifest.action.default_popup, manifest.background.service_worker, 'offscreen.html']) {
   if (!existsSync(join(ext, p))) fail(`missing file: ${p}`);
   else ok(`exists: ${p}`);
 }
+const offscreenHtml = readFileSync(join(ext, 'offscreen.html'), 'utf8');
+if (!offscreenHtml.includes('offscreen.js')) fail('offscreen.html must load offscreen.js');
+else ok('offscreen.html references offscreen.js');
 for (const size of ['16', '32', '48', '128']) {
   const icon = join(ext, 'icons', `icon${size}.png`);
   if (!existsSync(icon)) {
@@ -79,10 +95,11 @@ for (const ref of ['popup.css', 'popup.js']) {
   if (!existsSync(join(ext, ref))) fail(`missing file: ${ref}`);
 }
 
-// 5. page.js functions are self-contained (no module-scope references that
+// 5. injected functions are self-contained (no module-scope references that
 //    would break after toString serialization)
 const pageSrc = readFileSync(join(ext, 'lib', 'page.js'), 'utf8');
 const adapterSrc = readFileSync(join(ext, 'lib', 'adapters.js'), 'utf8');
+const managerSrc = readFileSync(join(ext, 'lib', 'manager.js'), 'utf8');
 const fns = [...pageSrc.matchAll(/export (?:async )?function (page\w+)/g)].map((m) => m[1]);
 // adapter next/prev fns are injected too — they live inside the ADAPTERS literal
 const adapterFns = [...adapterSrc.matchAll(/function ((?:yt|sp|sc)(?:Next|Prev))\(/g)].map((m) => m[1]);
@@ -96,7 +113,17 @@ for (const fn of [...fns, ...adapterFns]) {
     if (code.includes(helper)) fail(`${fn} references module-scope helper ${helper}`);
   }
 }
-ok(`page.js + adapters.js functions self-contained (${fns.length + adapterFns.length} injected)`);
+// the speed manager is injected with args and must likewise be self-contained
+if (!/export function installSpeedManager\(/.test(managerSrc)) {
+  fail('lib/manager.js must export installSpeedManager');
+}
+const mgrBody = managerSrc.slice(managerSrc.indexOf('function installSpeedManager'));
+for (const helper of ['collectMedia(', 'primaryOf(']) {
+  if (mgrBody.includes(helper)) fail(`installSpeedManager references module-scope helper ${helper}`);
+}
+ok(
+  `page.js + adapters.js + manager.js functions self-contained (${fns.length + adapterFns.length + 1} injected)`,
+);
 
 if (failures) {
   console.error(`\n${failures} check(s) failed`);

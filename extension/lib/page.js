@@ -11,8 +11,26 @@
 /**
  * Snapshot every media element in this frame (open shadow roots included).
  * Returned once per frame by executeScript({allFrames: true}).
+ *
+ * `site` (optional) names the site's own track buttons; when given, the
+ * frame also reports whether each control exists and whether the site has
+ * disabled it (no next track, etc.) — the popup mirrors that truthfully.
  */
-export function pageProbe() {
+export function pageProbe(site) {
+  const siteButtonState = (sel) => {
+    if (!sel) return { found: false, disabled: true };
+    let b = null;
+    try {
+      b = document.querySelector(sel);
+    } catch {
+      return { found: false, disabled: true };
+    }
+    if (!b) return { found: false, disabled: true };
+    return {
+      found: true,
+      disabled: !!(b.disabled || b.getAttribute('aria-disabled') === 'true'),
+    };
+  };
   const els = (() => {
     const found = [...document.querySelectorAll('video, audio')];
     for (const el of document.querySelectorAll('*')) {
@@ -20,9 +38,22 @@ export function pageProbe() {
     }
     return found.filter((el) => el.isConnected);
   })();
+  const siteButtons = site
+    ? {
+        next: siteButtonState(site.next),
+        prev: siteButtonState(site.prev),
+      }
+    : null;
   let sessionTitle = null;
+  let artwork = null;
   try {
     sessionTitle = navigator.mediaSession?.metadata?.title || null;
+    const arts = navigator.mediaSession?.metadata?.artwork ?? [];
+    // prefer the largest declared size; any src beats none
+    const best = [...arts]
+      .filter((a) => a && a.src)
+      .sort((a, b) => (parseInt(b.sizes) || 0) - (parseInt(a.sizes) || 0))[0];
+    artwork = best?.src ?? null;
   } catch {
     // isolated world may refuse mediaSession access; DOM fallbacks cover it
   }
@@ -44,12 +75,28 @@ export function pageProbe() {
   return {
     docTitle: document.title,
     pip: !!document.pictureInPictureElement,
+    artwork,
     elements,
+    siteButtons,
   };
 }
 
 /** Tiny state ping for the expanded panel's live seek/volume/rate/pip. */
-export function pagePing() {
+export function pagePing(site) {
+  const siteButtonState = (sel) => {
+    if (!sel) return { found: false, disabled: true };
+    let b = null;
+    try {
+      b = document.querySelector(sel);
+    } catch {
+      return { found: false, disabled: true };
+    }
+    if (!b) return { found: false, disabled: true };
+    return {
+      found: true,
+      disabled: !!(b.disabled || b.getAttribute('aria-disabled') === 'true'),
+    };
+  };
   const els = (() => {
     const found = [...document.querySelectorAll('video, audio')];
     for (const el of document.querySelectorAll('*')) {
@@ -67,6 +114,9 @@ export function pagePing() {
     volume: el.volume,
     rate: el.playbackRate,
     pip: !!document.pictureInPictureElement,
+    siteButtons: site
+      ? { next: siteButtonState(site.next), prev: siteButtonState(site.prev) }
+      : null,
   };
 }
 
@@ -195,21 +245,6 @@ export function pageSetVolume({ volume }) {
   if (!el) return { acted: false };
   el.volume = Math.min(1, Math.max(0, volume));
   return { acted: true, volume: el.volume };
-}
-
-/** Playback rate of the primary element (0.0625..16 hard limits). */
-export function pageSetRate({ rate }) {
-  const els = (() => {
-    const found = [...document.querySelectorAll('video, audio')];
-    for (const el of document.querySelectorAll('*')) {
-      if (el.shadowRoot) found.push(...el.shadowRoot.querySelectorAll('video, audio'));
-    }
-    return found.filter((el) => el.isConnected);
-  })();
-  const el = els.find((m) => !m.paused && !m.ended) || els[0];
-  if (!el) return { acted: false };
-  el.playbackRate = Math.min(16, Math.max(0.0625, rate));
-  return { acted: true, rate: el.playbackRate };
 }
 
 /** Toggle Picture-in-Picture on the primary video. */

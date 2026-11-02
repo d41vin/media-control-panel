@@ -55,16 +55,22 @@ export const ADAPTERS = {
     hosts: ['youtube.com', 'youtube-nocookie.com'],
     next: ytNext,
     prev: ytPrev,
+    nextSel: '.ytp-next-button',
+    prevSel: '.ytp-prev-button',
   },
   spotify: {
     hosts: ['spotify.com'],
     next: spNext,
     prev: spPrev,
+    nextSel: '[data-testid="control-button-skip-forward"]',
+    prevSel: '[data-testid="control-button-skip-back"]',
   },
   soundcloud: {
     hosts: ['soundcloud.com'],
     next: scNext,
     prev: scPrev,
+    nextSel: '.skipControl__next',
+    prevSel: '.skipControl__previous',
   },
 };
 
@@ -79,7 +85,7 @@ export function adapterFor(url) {
   for (const [key, adapter] of Object.entries(ADAPTERS)) {
     for (const h of adapter.hosts) {
       if (host === h || host.endsWith('.' + h)) {
-        return { key, next: adapter.next, prev: adapter.prev };
+        return { key, next: adapter.next, prev: adapter.prev, nextSel: adapter.nextSel, prevSel: adapter.prevSel };
       }
     }
   }

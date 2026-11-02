@@ -18,6 +18,7 @@
 
   <script type="module">
     import { installMockChrome, faviconSvg } from './mock-chrome.js';
+    import { fmtSpeed } from '../extension/lib/speed.js';
 
     const out0 = document.getElementById('out');
     window.addEventListener('error', (e) => {
@@ -36,6 +37,82 @@
     const chrome = installMockChrome({ sessionSeed: { recent: [2, 3] } });
     window.chrome = chrome;
     const mock = chrome._mock;
+
+    // --- offscreen document stubs -------------------------------------------------
+    // The REAL offscreen.js runs here against a controllable getUserMedia and a
+    // fake WebAudio graph, so cancellation and delayed-startup paths are
+    // deterministic: a test holds the getUserMedia promise, then resolves,
+    // rejects or leaves it pending after issuing stops.
+    const gumCalls = []; // { stream, track, resolve, reject }
+    function fakeStream() {
+      const track = {
+        stopped: false,
+        _l: {},
+        addEventListener(t, f) {
+          (this._l[t] ??= []).push(f);
+        },
+        removeEventListener(t, f) {
+          this._l[t] = (this._l[t] ?? []).filter((x) => x !== f);
+        },
+        stop() {
+          this.stopped = true;
+        },
+      };
+      return { stream: { getTracks: () => [track] }, track };
+    }
+    const fakeParam = () => ({ value: 1, setTargetAtTime() {} });
+    // a test may hold AudioContext.resume() open to race a stop against
+    // context initialization
+    let ctxGate = null;
+    class FakeAudioContext {
+      constructor() {
+        this.currentTime = 0;
+        this.state = 'suspended';
+      }
+      async resume() {
+        if (ctxGate) await ctxGate;
+        this.state = 'running';
+      }
+      createMediaStreamSource() {
+        return { connect: (n) => n, disconnect() {} };
+      }
+      createGain() {
+        return { gain: fakeParam(), connect: (n) => n, disconnect() {} };
+      }
+      createDynamicsCompressor() {
+        return {
+          threshold: fakeParam(),
+          knee: fakeParam(),
+          ratio: fakeParam(),
+          attack: fakeParam(),
+          release: fakeParam(),
+          connect: (n) => n,
+          disconnect() {},
+        };
+      }
+      async close() {}
+    }
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia() {
+          return new Promise((resolve, reject) => {
+            const call = fakeStream();
+            gumCalls.push({ ...call, resolve: () => resolve(call.stream), reject });
+          });
+        },
+      },
+    });
+    window.AudioContext = FakeAudioContext;
+
+    // record what the offscreen document receives and reports
+    const offscreenMsgs = [];
+    const boostResults = [];
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (typeof msg?.type !== 'string') return;
+      if (msg.type.startsWith('mcp-boost-offscreen-')) offscreenMsgs.push(msg);
+      if (msg.type === 'mcp-boost-result') boostResults.push(msg);
+    });
 
     // Unfocused tabs get their timers clamped to >=1s by Chromium, so fixed
     // sleeps make asserts read mid-flight state. Poll for the condition
@@ -71,13 +148,40 @@
       url: 'https://docs.google.com/document/d/x',
     });
 
-    await import('../extension/background.js');
+    try {
+      await import('../extension/background.js');
+    } catch (e) {
+      const div = document.createElement('div');
+      div.className = 'fail';
+      div.textContent = 'IMPORT ERROR: ' + (e?.stack ?? e?.message ?? String(e));
+      out0.append(div);
+    }
+    // the real offscreen document logic, against the stubs above
+    try {
+      await import('../extension/offscreen.js');
+    } catch (e) {
+      const div = document.createElement('div');
+      div.className = 'fail';
+      div.textContent = 'OFFSCREEN IMPORT ERROR: ' + (e?.stack ?? e?.message ?? String(e));
+      out0.append(div);
+    }
     mock.fireInstalled();
     await new Promise((r) => setTimeout(r, 100));
 
     const out = document.getElementById('out');
     const results = [];
-    const assert = (name, ok, detail) => results.push({ name, ok, detail });
+    const assert = (name, ok, detail) => {
+      document.title = 'AT: ' + name;
+      try {
+        window.__dbg = JSON.stringify({
+          f1: offscreenMsgs.filter((m) => m.tabId === 1 && m.type === 'mcp-boost-offscreen-start').length,
+          f4: offscreenMsgs.filter((m) => m.tabId === 4 && m.type === 'mcp-boost-offscreen-start').length,
+          res: boostResults.length, cr: chrome.offscreen._created, cl: chrome.offscreen._closed,
+          g: gumCalls.length,
+        });
+      } catch {}
+      results.push({ name, ok, detail });
+    };
 
     // --- badge ---------------------------------------------------------------
     // audible tabs: only tab 1 (tab 2 is muted)
@@ -139,6 +243,691 @@
     await new Promise((r) => setTimeout(r, 100));
     const recent = (await chrome.storage.session.get('recent')).recent;
     assert('onRemoved prunes recent list', JSON.stringify(recent) === '[99]', `recent=${JSON.stringify(recent)}`);
+
+    // --- speed policy --------------------------------------------------------------
+    // Coordination only — real rate application is covered by the E2E rig.
+    // Reports carry the tab's policy revision (DESIGN.md R1): the harness
+    // reads the current rev so every fired report is "current" unless a test
+    // says else.
+    const curRev = async (tabId) =>
+      (await chrome.storage.session.get('speedRevs')).speedRevs?.[tabId] ?? 0;
+
+    // Global speed change: page managers are injected into candidate tabs.
+    await chrome.storage.local.set({ speed: 1.5 });
+    await until(() =>
+      mock.scriptingCalls.some((c) => c.func === 'installSpeedManager' && c.args?.[0]?.rate === 1.5),
+    );
+    assert(
+      'global speed change injects page managers (rate 1.5)',
+      mock.scriptingCalls.some((c) => c.func === 'installSpeedManager' && c.args?.[0]?.rate === 1.5),
+      `calls=${JSON.stringify(mock.scriptingCalls.map((c) => [c.func, c.args?.[0]]))}`,
+    );
+
+    // A page-originated rate change is adopted as an override, not fought.
+    mock.fireMessageFromTab({ type: 'mcp-speed-report', rate: 1.1, rev: await curRev(1) }, 1);
+    await until(async () => {
+      const m = await chrome.storage.session.get('speedOverrides');
+      return m.speedOverrides?.[1]?.rate === 1.1;
+    });
+    const ov1 = (await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1];
+    assert(
+      'page-originated rate change adopted as override (exact 1.1 preserved)',
+      ov1?.rate === 1.1 && typeof ov1?.url === 'string',
+      `override=${JSON.stringify(ov1)}`,
+    );
+    assert(
+      'override is applied back to the page manager',
+      mock.sentTabMessages.some((m) => m.tabId === 1 && m.msg.type === 'mcp-speed-apply' && m.msg.rate === 1.1),
+      `sent=${JSON.stringify(mock.sentTabMessages)}`,
+    );
+
+    // R1: a report written under an older policy revision is stale — dropped
+    // without side effects, no matter what rate it carries.
+    const revBeforeStale = await curRev(1);
+    mock.fireMessageFromTab({ type: 'mcp-speed-report', rate: 3.3, rev: revBeforeStale - 1 }, 1);
+    await new Promise((r) => setTimeout(r, 250));
+    assert(
+      'report under a stale revision is dropped (no override churn)',
+      (await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1]?.rate === 1.1,
+      'stale report mutated the override',
+    );
+
+    // A native change landing exactly on the global rate is inheritance.
+    mock.fireMessageFromTab({ type: 'mcp-speed-report', rate: 1.5, rev: await curRev(1) }, 1);
+    await until(async () => {
+      const m = await chrome.storage.session.get('speedOverrides');
+      return !m.speedOverrides?.[1];
+    });
+    assert(
+      'report at exactly the global rate clears the override',
+      !((await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1]),
+      'override still present',
+    );
+
+    // Popup-initiated page override + reset.
+    mock.fireMessage({ type: 'mcp-speed-page', tabId: 2, rate: 2.25 });
+    await until(async () => {
+      const m = await chrome.storage.session.get('speedOverrides');
+      return m.speedOverrides?.[2]?.rate === 2.25;
+    });
+    assert(
+      'popup page-speed command stores an override',
+      (await chrome.storage.session.get('speedOverrides')).speedOverrides?.[2]?.rate === 2.25,
+      'override missing',
+    );
+
+    // R7: a report that was in flight BEFORE the page command (stale rev) can
+    // never undo it — the reset/override decision is atomic by revision.
+    const revAfterPage = await curRev(2);
+    mock.fireMessageFromTab({ type: 'mcp-speed-report', rate: 1.75, rev: revAfterPage - 1 }, 2);
+    await new Promise((r) => setTimeout(r, 250));
+    assert(
+      'stale in-flight report cannot undo a newer page-speed command',
+      (await chrome.storage.session.get('speedOverrides')).speedOverrides?.[2]?.rate === 2.25,
+      'stale report overwrote the fresh command',
+    );
+
+    mock.fireMessage({ type: 'mcp-speed-reset', tabId: 2 });
+    await until(async () => {
+      const m = await chrome.storage.session.get('speedOverrides');
+      return !m.speedOverrides?.[2];
+    });
+    assert('popup reset clears the page override', true, '');
+
+    // R7 (matrix #16): a stale page report cannot resurrect a CLEARED override.
+    mock.fireMessageFromTab({ type: 'mcp-speed-report', rate: 2.25, rev: await curRev(2) }, 2);
+    await until(async () => {
+      const m = await chrome.storage.session.get('speedOverrides');
+      return m.speedOverrides?.[2]?.rate === 2.25;
+    });
+    const revBeforeReset = await curRev(2);
+    mock.fireMessage({ type: 'mcp-speed-reset', tabId: 2 });
+    await until(async () => !((await chrome.storage.session.get('speedOverrides')).speedOverrides?.[2]));
+    mock.fireMessageFromTab({ type: 'mcp-speed-report', rate: 2.25, rev: revBeforeReset }, 2);
+    await new Promise((r) => setTimeout(r, 250));
+    assert(
+      'stale page report cannot resurrect a cleared override',
+      !((await chrome.storage.session.get('speedOverrides')).speedOverrides?.[2]),
+      'cleared override came back',
+    );
+
+    // Global back to 1.00× with no overrides: managers get disconnect.
+    await chrome.storage.local.set({ speed: 1 });
+    await until(() => mock.sentTabMessages.some((m) => m.msg.type === 'mcp-speed-disconnect'));
+    assert(
+      'global 1.00× disconnects page managers',
+      mock.sentTabMessages.some((m) => m.msg.type === 'mcp-speed-disconnect'),
+      `sent=${JSON.stringify(mock.sentTabMessages.map((m) => [m.tabId, m.msg.type]))}`,
+    );
+
+    // Tab removal clears its override (never leaks across navigations/tabs).
+    await chrome.storage.local.set({ speed: 2 });
+    await until(async () => {
+      // wait for the sync triggered by the 2× write to store nothing new
+      return true;
+    });
+    mock.fireMessageFromTab({ type: 'mcp-speed-report', rate: 1.3, rev: await curRev(2) }, 2);
+    await until(async () => {
+      const m = await chrome.storage.session.get('speedOverrides');
+      return !!m.speedOverrides?.[2];
+    });
+    await chrome.tabs.remove(2);
+    await until(async () => {
+      const m = await chrome.storage.session.get('speedOverrides');
+      return !m.speedOverrides?.[2];
+    });
+    assert('tab removal clears its speed override',
+      !((await chrome.storage.session.get('speedOverrides')).speedOverrides?.[2]),
+      'override survived tab removal');
+
+    // --- navigation identity: committed vs same-document (R2/R3) --------------------
+    // An override belongs to the tab's COMMITTED document (documentId). A full
+    // navigation clears it — including a hard reload of the SAME URL, whose new
+    // documentId proves the old page is gone; an SPA pushState or hash change
+    // keeps it (same document) and re-syncs.
+    mock.fireCommitted(1, 'https://www.youtube.com/watch?v=a', 'doc-A');
+    mock.fireMessageFromTab({ type: 'mcp-speed-report', rate: 1.4, rev: await curRev(1) }, 1);
+    await until(async () => {
+      const m = await chrome.storage.session.get('speedOverrides');
+      return m.speedOverrides?.[1]?.rate === 1.4;
+    });
+    const ovA = (await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1];
+    assert(
+      'override records the committed document (url + documentId)',
+      ovA?.url === 'https://www.youtube.com/watch?v=a' && ovA?.documentId === 'doc-A',
+      `override=${JSON.stringify(ovA)}`,
+    );
+
+    const appliesBeforeSpa = mock.sentTabMessages.filter((m) => m.msg.type === 'mcp-speed-apply').length;
+    mock.fireHistoryState(1, 'https://www.youtube.com/watch?v=b');
+    await until(
+      () => mock.sentTabMessages.filter((m) => m.msg.type === 'mcp-speed-apply').length > appliesBeforeSpa,
+    );
+    assert(
+      'same-document SPA transition keeps the override (new URL is not a new page)',
+      (await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1]?.rate === 1.4,
+      'override was cleared by a pushState transition',
+    );
+    const spaApply = mock.sentTabMessages.filter((m) => m.msg.type === 'mcp-speed-apply').pop();
+    assert(
+      'SPA transition re-synced the manager with the policy rev',
+      spaApply.tabId === 1 && spaApply.msg.rate === 1.4 && spaApply.msg.rev === (await curRev(1)),
+      `apply=${JSON.stringify(spaApply)}`,
+    );
+
+    // a hash-only change is also the same document: the override survives
+    mock.fireReferenceFragment(1, 'https://www.youtube.com/watch?v=b#t=30');
+    await new Promise((r) => setTimeout(r, 150));
+    assert(
+      'hash-only fragment change keeps the override (same document)',
+      (await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1]?.rate === 1.4,
+      'override was cleared by a hash change',
+    );
+
+    mock.fireCommitted(1, 'https://www.youtube.com/watch?v=c');
+    await until(async () => !((await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1]));
+    assert(
+      'full navigation to a different document clears the override',
+      !((await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1]),
+      'override followed the navigation',
+    );
+
+    // a HARD RELOAD of the same URL is a new document (new documentId): the
+    // override dies with the old page even though the URL is identical
+    mock.fireCommitted(1, 'https://www.youtube.com/watch?v=c', 'doc-C1');
+    mock.fireMessageFromTab({ type: 'mcp-speed-report', rate: 1.6, rev: await curRev(1) }, 1);
+    await until(async () => {
+      const m = await chrome.storage.session.get('speedOverrides');
+      return m.speedOverrides?.[1]?.rate === 1.6;
+    });
+    const revBeforeReload = await curRev(1);
+    mock.fireCommitted(1, 'https://www.youtube.com/watch?v=c'); // same URL, NEW documentId
+    await until(async () => !((await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1]));
+    assert(
+      'hard reload of the same URL clears the override (documentId changed)',
+      !((await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1]),
+      'override survived a same-URL reload',
+    );
+
+    // a straggler report from the reloaded-away document cannot resurrect it
+    mock.fireMessageFromTab(
+      { type: 'mcp-speed-report', rate: 1.6, rev: revBeforeReload },
+      1,
+      'doc-C1',
+    );
+    await new Promise((r) => setTimeout(r, 150));
+    assert(
+      'stale report from the previous document cannot resurrect its override',
+      !((await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1]),
+      'a dead document restored its override',
+    );
+
+    // --- frame-aware provenance: per-frame committed documents ----------------------
+    // The manager runs in every frame; each frame has its own documentId. A
+    // report is validated against the committed document of the FRAME it came
+    // from, while the page override still belongs to the top-level document.
+    mock.fireCommitted(1, 'https://www.youtube.com/watch?v=frames', 'doc-T1');
+    mock.fireFrameCommitted(1, 7, 'https://embed.example/player', 'doc-F1');
+    mock.fireMessageFromTab(
+      { type: 'mcp-speed-report', rate: 1.7, rev: await curRev(1) },
+      1,
+      'doc-F1',
+      7,
+    );
+    await until(async () => (await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1]?.rate === 1.7);
+    assert(
+      'report from a CURRENT child-frame document is accepted',
+      (await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1]?.rate === 1.7,
+      `override=${JSON.stringify((await chrome.storage.session.get('speedOverrides')).speedOverrides)}`,
+    );
+
+    // the child frame navigates: its document is replaced, so a straggler
+    // report from the OLD frame document must be rejected
+    mock.fireFrameCommitted(1, 7, 'https://embed.example/player2', 'doc-F2');
+    mock.fireMessageFromTab(
+      { type: 'mcp-speed-report', rate: 1.9, rev: await curRev(1) },
+      1,
+      'doc-F1',
+      7,
+    );
+    await new Promise((r) => setTimeout(r, 150));
+    assert(
+      'report from a REPLACED child-frame document is rejected',
+      (await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1]?.rate === 1.7,
+      'a replaced frame document changed the policy',
+    );
+    assert(
+      'child-frame navigation leaves the top-level page override intact',
+      (await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1]?.rate === 1.7,
+      'the override did not survive a subframe navigation',
+    );
+
+    // a report from the replacement frame document is accepted
+    mock.fireMessageFromTab(
+      { type: 'mcp-speed-report', rate: 1.8, rev: await curRev(1) },
+      1,
+      'doc-F2',
+      7,
+    );
+    await until(async () => (await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1]?.rate === 1.8);
+    assert(
+      'report from the replacement child-frame document is accepted',
+      (await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1]?.rate === 1.8,
+      'the new frame document was rejected',
+    );
+
+    // a top-level navigation invalidates the old frame reports and the override
+    const revBeforeTopNav = await curRev(1);
+    mock.fireCommitted(1, 'https://www.youtube.com/watch?v=next', 'doc-T2');
+    await until(async () => !((await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1]));
+    mock.fireMessageFromTab(
+      { type: 'mcp-speed-report', rate: 1.8, rev: revBeforeTopNav },
+      1,
+      'doc-F2',
+      7,
+    );
+    await new Promise((r) => setTimeout(r, 150));
+    assert(
+      'top-level navigation invalidates old frame reports (no resurrection)',
+      !((await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1]),
+      'a frame report from the previous page restored its override',
+    );
+
+    // --- rate display: off-grid values keep their precision (lib/speed.js) ----------
+    const fmtCases = [
+      [1, '1.00×'],
+      [1.1, '1.10×'],
+      [1.5, '1.50×'],
+      [1.175, '1.175×'],
+      [1.3333, '1.3333×'],
+      [0.25, '0.25×'],
+      [2.75, '2.75×'],
+      [4, '4.00×'],
+    ];
+    const fmtBad = fmtCases.filter(([r, want]) => fmtSpeed(r) !== want);
+    assert(
+      `fmtSpeed preserves two-decimal and off-grid precision (${fmtCases.length} cases)`,
+      fmtBad.length === 0,
+      `mismatched: ${JSON.stringify(fmtBad.map(([r]) => [r, fmtSpeed(r)]))}`,
+    );
+
+    // --- defaultPlaybackRate stamping (R4, the load-algorithm defense) --------------
+    // The manager runs for real against the mock's fake elements (rebound
+    // document). A fresh install stamps BOTH rates; teardown restores them.
+    delete window.__mcpSpeed; // isolate this scenario from earlier managers
+    await chrome.storage.local.set({ speed: 3 });
+    await until(() => {
+      const el = mock.tabs.get(1)._elements[0];
+      return !el.paused && Math.abs(el.playbackRate - 3) < 1e-6 && Math.abs(el.defaultPlaybackRate - 3) < 1e-6;
+    });
+    assert(
+      'enforcement stamps playbackRate AND defaultPlaybackRate',
+      Math.abs(mock.tabs.get(1)._elements[0].defaultPlaybackRate - 3) < 1e-6,
+      `default=${mock.tabs.get(1)._elements[0].defaultPlaybackRate}`,
+    );
+    // lift the policy the way the product does — global to 1.00×, so the
+    // worker stops re-syncing and the disconnect is final (firing it while a
+    // policy is still active would just be undone by the next sync)
+    await chrome.storage.local.set({ speed: 1 });
+    await new Promise((r) => setTimeout(r, 120));
+    mock.fireMessage({ type: 'mcp-speed-disconnect' });
+    await until(() => Math.abs(mock.tabs.get(1)._elements[0].playbackRate - 1) < 1e-6);
+    const afterTeardown = mock.tabs.get(1)._elements[0];
+    assert(
+      'teardown restores 1.00× and the site\'s own defaultPlaybackRate',
+      Math.abs(afterTeardown.playbackRate - 1) < 1e-6 &&
+        Math.abs(afterTeardown.defaultPlaybackRate - 1) < 1e-6 &&
+        afterTeardown.__mcpPrevDefault === undefined,
+      `rate=${afterTeardown.playbackRate} default=${afterTeardown.defaultPlaybackRate}`,
+    );
+    delete window.__mcpSpeed;
+
+    // --- boost: real-flow state truth ------------------------------------------------
+    // The offscreen document here is the REAL offscreen.js running against the
+    // deferred getUserMedia stub, so every transition goes through the actual
+    // worker → offscreen → result message flow, including delayed operations.
+    const cleared = async (tabId) => !((await chrome.storage.session.get('boosts')).boosts?.[tabId]);
+    // clean start resolves the capture: pending → active at the requested gain
+    mock.fireMessage({ type: 'mcp-boost-start', tabId: 1, gain: 250 });
+    let gumBefore = gumCalls.length;
+    await until(() => gumCalls.length > gumBefore); // offscreen started getUserMedia
+    gumCalls[gumCalls.length - 1].resolve();
+    await until(async () => (await chrome.storage.session.get('boosts')).boosts?.[1]?.state === 'active');
+    assert('capture resolves: boost activates through the real offscreen flow',
+      (await chrome.storage.session.get('boosts')).boosts?.[1]?.gain === 250,
+      `boosts=${JSON.stringify((await chrome.storage.session.get('boosts')).boosts)}`);
+
+    // a failing getUserMedia lands in an error state, never a fake active
+    mock.fireMessage({ type: 'mcp-boost-stop', tabId: 1 });
+    await until(() => cleared(1));
+    mock.fireMessage({ type: 'mcp-boost-start', tabId: 1, gain: 250 });
+    gumBefore = gumCalls.length;
+    await until(() => gumCalls.length > gumBefore);
+    gumCalls[gumCalls.length - 1].reject(new Error('capture refused'));
+    await until(async () => (await chrome.storage.session.get('boosts')).boosts?.[1]?.state === 'error');
+    assert('failed capture lands in an error state, not a fake active',
+      (await chrome.storage.session.get('boosts')).boosts?.[1]?.state === 'error',
+      'no error state');
+    // cleanup: a failed startup must release the offscreen document
+    const failedDocClosed = await until(
+      () => chrome.offscreen._created - chrome.offscreen._closed === 0,
+      3000,
+    );
+    assert('failed startup releases the offscreen document (no lingering pipeline doc)',
+      failedDocClosed === true,
+      `live=${chrome.offscreen._created - chrome.offscreen._closed}`);
+    mock.fireMessage({ type: 'mcp-boost-ended', tabId: 1 });
+    await until(() => cleared(1));
+    assert('stream end clears the boost state (no stale active)', await cleared(1), 'stale active survived');
+
+    // the user changes the requested gain while the capture is still pending:
+    // the active pipeline must settle at that latest choice (350%), and the
+    // offscreen pipeline must be told
+    mock.fireMessage({ type: 'mcp-boost-start', tabId: 1, gain: 200 });
+    gumBefore = gumCalls.length;
+    await until(() => gumCalls.length > gumBefore);
+    mock.fireMessage({ type: 'mcp-boost-gain', tabId: 1, gain: 350 });
+    await new Promise((r) => setTimeout(r, 100));
+    gumCalls[gumCalls.length - 1].resolve(); // capture completes AFTER the change
+    await until(async () => (await chrome.storage.session.get('boosts')).boosts?.[1]?.state === 'active');
+    assert('gain chosen during startup lands at the latest choice (350%)',
+      (await chrome.storage.session.get('boosts')).boosts?.[1]?.gain === 350 &&
+        offscreenMsgs.some((m) => m.type === 'mcp-boost-offscreen-gain' && m.tabId === 1 && m.gain === 350),
+      `boosts=${JSON.stringify((await chrome.storage.session.get('boosts')).boosts)} fw=${JSON.stringify(offscreenMsgs)}`);
+    mock.fireMessage({ type: 'mcp-boost-stop', tabId: 1 });
+    await until(() => cleared(1));
+
+    // --- boost routing + per-tab startup serialization ------------------------------
+    // Popup-facing ('mcp-boost-*') and offscreen-facing ('mcp-boost-offscreen-*')
+    // commands are different message types: exactly one offscreen-start is ever
+    // forwarded per capture attempt.
+    const startForwards = (tabId) => offscreenMsgs.filter((m) => m.tabId === tabId && m.type === 'mcp-boost-offscreen-start').length;
+    const baseForwards1 = startForwards(1);
+    const baseForwards4 = startForwards(4);
+    const baseCreated = chrome.offscreen._created;
+
+    mock.fireMessage({ type: 'mcp-boost-start', tabId: 1, gain: 250 });
+    await until(() => startForwards(1) === baseForwards1 + 1);
+    assert('worker fetches the stream id and forwards exactly one offscreen-start',
+      startForwards(1) === baseForwards1 + 1 &&
+        chrome.offscreen._created - chrome.offscreen._closed === 1,
+      `forwards=${startForwards(1)}/${baseForwards1} live=${chrome.offscreen._created - chrome.offscreen._closed}`);
+
+    // A duplicate start while the first is still in flight must be dropped —
+    // two getUserMedia calls would fight over the single-use stream id.
+    mock.fireMessage({ type: 'mcp-boost-start', tabId: 1, gain: 300 });
+    await new Promise((r) => setTimeout(r, 250));
+    assert('duplicate start mid-startup is dropped (one attempt per stream id)',
+      startForwards(1) === baseForwards1 + 1, `tab-1 forwards=${startForwards(1)}/${baseForwards1}`);
+
+    // A second tab can start while the pipeline document already exists.
+    mock.fireMessage({ type: 'mcp-boost-start', tabId: 4, gain: 200 });
+    await until(() => startForwards(4) === baseForwards4 + 1);
+    assert('second tab starts while the offscreen document is already active (still one document)',
+      chrome.offscreen._created - chrome.offscreen._closed === 1,
+      `live=${chrome.offscreen._created - chrome.offscreen._closed}`);
+
+    // both captures resolve: each lands at its own gain (tab 1 at the
+    // duplicate start's 300 — the user's latest choice)
+    const routingCalls = gumCalls.slice(-2);
+    routingCalls[0].resolve();
+    routingCalls[1].resolve();
+    await until(async () => (await chrome.storage.session.get('boosts')).boosts?.[1]?.state === 'active');
+    await until(async () => (await chrome.storage.session.get('boosts')).boosts?.[4]?.state === 'active');
+    assert('capture result activates the boost',
+      (await chrome.storage.session.get('boosts')).boosts?.[1]?.gain === 300 &&
+        (await chrome.storage.session.get('boosts')).boosts?.[4]?.gain === 200,
+      'not active at the expected gains');
+
+    // --- cancellation: delayed operations (request ids) ------------------------------
+    // Each scenario holds a stage of the startup open, cancels, then releases
+    // the stage — proving the late resolution establishes nothing.
+
+    // (a) stop while getMediaStreamId is still gated: nothing is forwarded,
+    //     and releasing the gate afterwards establishes nothing
+    mock.fireMessage({ type: 'mcp-boost-stop', tabId: 1 });
+    mock.fireMessage({ type: 'mcp-boost-stop', tabId: 4 });
+    await until(() => cleared(1) && cleared(4));
+    let forwards = startForwards(1);
+    let resultCount = boostResults.length;
+    const gateA = mock.gateCapture(1);
+    mock.fireMessage({ type: 'mcp-boost-start', tabId: 1, gain: 200 });
+    await until(async () => (await chrome.storage.session.get('boosts')).boosts?.[1]?.state === 'pending');
+    mock.fireMessage({ type: 'mcp-boost-stop', tabId: 1 });
+    await until(() => cleared(1));
+    gateA.release();
+    await new Promise((r) => setTimeout(r, 200));
+    assert('stop during the stream-id fetch cancels the request (no forward, no capture)',
+      startForwards(1) === forwards && boostResults.length === resultCount && (await cleared(1)),
+      `forwards=${startForwards(1)}/${forwards} results=${boostResults.length}/${resultCount}`);
+
+    // (b) stop while the offscreen getUserMedia() is in flight: the late
+    //     stream is dropped, its tracks stopped, no graph, no result
+    forwards = startForwards(1);
+    resultCount = boostResults.length;
+    mock.fireMessage({ type: 'mcp-boost-start', tabId: 1, gain: 200 });
+    gumBefore = gumCalls.length;
+    await until(() => gumCalls.length > gumBefore);
+    const pendingCall = gumCalls[gumCalls.length - 1];
+    mock.fireMessage({ type: 'mcp-boost-stop', tabId: 1 });
+    await until(() => cleared(1));
+    pendingCall.resolve(); // the stream resolves AFTER cancellation
+    await new Promise((r) => setTimeout(r, 200));
+    assert('stop during getUserMedia drops the late stream (tracks stopped, no result)',
+      pendingCall.track.stopped === true && boostResults.length === resultCount && (await cleared(1)),
+      `trackStopped=${pendingCall.track.stopped} results=${boostResults.length}/${resultCount}`);
+
+    // (c) a late success under the cancelled request id cannot resurrect
+    forwards = startForwards(4);
+    mock.fireMessage({ type: 'mcp-boost-start', tabId: 4, gain: 200 });
+    gumBefore = gumCalls.length;
+    await until(() => gumCalls.length > gumBefore);
+    const req4 = offscreenMsgs.filter((m) => m.tabId === 4 && m.type === 'mcp-boost-offscreen-start').at(-1).reqId;
+    gumCalls[gumCalls.length - 1].resolve();
+    await until(async () => (await chrome.storage.session.get('boosts')).boosts?.[4]?.state === 'active');
+    mock.fireMessage({ type: 'mcp-boost-stop', tabId: 4 });
+    await until(() => cleared(4));
+    mock.fireMessage({ type: 'mcp-boost-result', tabId: 4, ok: true, gain: 200, reqId: req4 });
+    await new Promise((r) => setTimeout(r, 150));
+    assert('late success under the cancelled request id does not resurrect the boost',
+      await cleared(4), 'stale result resurrected the boost');
+
+    // (d) restarting after a cancellation works, cleanly
+    mock.fireMessage({ type: 'mcp-boost-start', tabId: 4, gain: 200 });
+    gumBefore = gumCalls.length;
+    await until(() => gumCalls.length > gumBefore);
+    gumCalls[gumCalls.length - 1].resolve();
+    await until(async () => (await chrome.storage.session.get('boosts')).boosts?.[4]?.state === 'active');
+    const dState = (await chrome.storage.session.get('boosts')).boosts;
+    assert('restarting boost after a cancellation starts a fresh capture',
+      dState?.[4]?.state === 'active', `state=${JSON.stringify(dState)}`);
+    mock.fireMessage({ type: 'mcp-boost-stop', tabId: 4 });
+    await until(() => cleared(4));
+
+    // (e) navigation during startup cancels the in-flight request
+    forwards = startForwards(1);
+    const gateE = mock.gateCapture(1);
+    mock.fireMessage({ type: 'mcp-boost-start', tabId: 1, gain: 200 });
+    await until(async () => (await chrome.storage.session.get('boosts')).boosts?.[1]?.state === 'pending');
+    mock.fireUpdated(1, { url: 'https://other.example/page' });
+    await until(() => cleared(1));
+    gateE.release();
+    await new Promise((r) => setTimeout(r, 200));
+    assert('navigation during startup cancels the request (no forward after release)',
+      startForwards(1) === forwards && (await cleared(1)),
+      `forwards=${startForwards(1)}/${forwards}`);
+
+    // (f) hash-only navigation stops an ACTIVE boost (onReferenceFragmentUpdated)
+    mock.fireMessage({ type: 'mcp-boost-start', tabId: 4, gain: 200 });
+    gumBefore = gumCalls.length;
+    await until(() => gumCalls.length > gumBefore);
+    gumCalls[gumCalls.length - 1].resolve();
+    await until(async () => (await chrome.storage.session.get('boosts')).boosts?.[4]?.state === 'active');
+    mock.fireReferenceFragment(4, 'https://site.example/watch?v=1#t=42');
+    await until(() => cleared(4));
+    assert('hash-only navigation stops the boost (same document, URL gone)',
+      await cleared(4) && offscreenMsgs.some((m) => m.tabId === 4 && m.type === 'mcp-boost-offscreen-stop'),
+      'boost survived a hash change');
+
+    // --- boost: full-startup deadline + the remaining cancellation gaps -------------
+    // (g) cancellation while the OFFSCREEN DOCUMENT is being created: no
+    //     stream id may be fetched or forwarded after the stop
+    let beforeGum = gumCalls.length;
+    let beforeForwards = startForwards(1);
+    const gateCreate = mock.gateOffscreenCreate();
+    mock.fireMessage({ type: 'mcp-boost-start', tabId: 1, gain: 200 });
+    await until(async () => (await chrome.storage.session.get('boosts')).boosts?.[1]?.state === 'pending');
+    mock.fireMessage({ type: 'mcp-boost-stop', tabId: 1 });
+    await until(() => cleared(1));
+    gateCreate.release();
+    await new Promise((r) => setTimeout(r, 300));
+    assert('stop during offscreen-document creation cancels before the stream id is fetched',
+      gumCalls.length === beforeGum &&
+        startForwards(1) === beforeForwards &&
+        (await cleared(1)),
+      `gum=${gumCalls.length}/${beforeGum} forwards=${startForwards(1)}/${beforeForwards}`);
+
+    // (h) the end-to-end startup deadline: a capture stuck in getUserMedia
+    //     converges to a truthful error, its late stream is dropped, and a
+    //     fresh attempt afterwards starts cleanly
+    mock.fireMessage({ type: 'mcp-boost-start', tabId: 4, gain: 200 });
+    beforeGum = gumCalls.length;
+    await until(() => gumCalls.length > beforeGum);
+    const timedOutCall = gumCalls[gumCalls.length - 1];
+    const resultsBeforeTimeout = boostResults.length;
+    const timedOut = await until(
+      async () => (await chrome.storage.session.get('boosts')).boosts?.[4]?.state === 'error',
+      15000,
+    );
+    assert('startup deadline converges a hung capture to a truthful error', timedOut === true,
+      `boosts=${JSON.stringify((await chrome.storage.session.get('boosts')).boosts)}`);
+    assert('the timeout sends an offscreen stop scoped to the expired request',
+      offscreenMsgs.some((m) => m.tabId === 4 && m.type === 'mcp-boost-offscreen-stop'),
+      'no stop message for the expired request');
+    const timeoutDocClosed = await until(
+      () => chrome.offscreen._created - chrome.offscreen._closed === 0,
+      3000,
+    );
+    assert('the expired startup releases the offscreen document', timeoutDocClosed === true,
+      `live=${chrome.offscreen._created - chrome.offscreen._closed}`);
+    // the stream resolving after the deadline is dropped
+    timedOutCall.resolve();
+    await new Promise((r) => setTimeout(r, 300));
+    assert('a stream resolving after the deadline is dropped (tracks stopped, no result)',
+      timedOutCall.track.stopped === true && boostResults.length === resultsBeforeTimeout,
+      `trackStopped=${timedOutCall.track.stopped} results=${boostResults.length}/${resultsBeforeTimeout}`);
+    // a fresh attempt after the timeout works
+    mock.fireMessage({ type: 'mcp-boost-start', tabId: 4, gain: 200 });
+    beforeGum = gumCalls.length;
+    await until(() => gumCalls.length > beforeGum);
+    gumCalls[gumCalls.length - 1].resolve();
+    await until(async () => (await chrome.storage.session.get('boosts')).boosts?.[4]?.state === 'active');
+    assert('a fresh boost attempt after a timeout starts cleanly',
+      (await chrome.storage.session.get('boosts')).boosts?.[4]?.state === 'active', 'not active');
+    mock.fireMessage({ type: 'mcp-boost-stop', tabId: 4 });
+    await until(() => cleared(4));
+
+    // (i) a stop racing AudioContext initialization: the stream is dropped,
+    //     nothing is connected, no result is reported
+    mock.fireMessage({ type: 'mcp-boost-start', tabId: 1, gain: 200 });
+    beforeGum = gumCalls.length;
+    await until(() => gumCalls.length > beforeGum);
+    const ctxRaceCall = gumCalls[gumCalls.length - 1];
+    const resultsBeforeCtxRace = boostResults.length;
+    const ctxRelease = { fire: null };
+    ctxGate = new Promise((r) => {
+      ctxRelease.fire = r;
+    });
+    ctxRaceCall.resolve(); // stream resolves → start() blocks in AudioContext.resume()
+    await new Promise((r) => setTimeout(r, 200));
+    mock.fireMessage({ type: 'mcp-boost-stop', tabId: 1 });
+    await until(() => cleared(1));
+    ctxGate = null;
+    ctxRelease.fire();
+    await new Promise((r) => setTimeout(r, 300));
+    assert('stop racing AudioContext initialization drops the stream (no graph, no result)',
+      ctxRaceCall.track.stopped === true && boostResults.length === resultsBeforeCtxRace,
+      `trackStopped=${ctxRaceCall.track.stopped} results=${boostResults.length}/${resultsBeforeCtxRace}`);
+
+    // --- navigation stops the boost ---------------------------------------------------
+    const navForwards = startForwards(4);
+    mock.fireMessage({ type: 'mcp-boost-start', tabId: 4, gain: 200 });
+    await until(() => startForwards(4) === navForwards + 1);
+    gumCalls[gumCalls.length - 1].resolve();
+    await until(async () => (await chrome.storage.session.get('boosts')).boosts?.[4]?.state === 'active');
+    mock.fireUpdated(4, { url: 'https://other.example/page' });
+    await until(() => cleared(4));
+    assert('navigation to a different URL stops the boost (worker-initiated stop)',
+      await cleared(4) && offscreenMsgs.some((m) => m.tabId === 4 && m.type === 'mcp-boost-offscreen-stop'),
+      'boost survived navigation');
+
+    // --- lifecycle reconciliation: pipeline gone → state cleared ----------------------
+    mock.fireMessage({ type: 'mcp-boost-start', tabId: 1, gain: 250 });
+    gumBefore = gumCalls.length;
+    await until(() => gumCalls.length > gumBefore);
+    gumCalls[gumCalls.length - 1].resolve();
+    const wentActive = await until(async () => (await chrome.storage.session.get('boosts')).boosts?.[1]?.state === 'active');
+    const rState = (await chrome.storage.session.get('boosts')).boosts;
+    assert('reconcile setup: the restarted boost reached active', wentActive === true, `state=${JSON.stringify(rState)}`);
+    chrome.offscreen._closed = chrome.offscreen._created; // simulate the document dying
+    mock.fireMessage({ type: 'mcp-speed-sync' });
+    await until(() => cleared(1));
+    assert('missing offscreen document converges the boost state to cleared',
+      await cleared(1), 'stale active state survived a vanished pipeline');
+
+    // --- managed tabs stay governed even when detection loses them --------------------
+    // Tab 1 is playing at the current global speed → injected → recorded as
+    // managed. Then it becomes INELIGIBLE (media paused, aged out of the
+    // recent list, unpinned) — the global reset must still disconnect it.
+    await chrome.storage.local.set({ speed: 2 });
+    await until(async () => {
+      const m = await chrome.storage.session.get('speedManaged');
+      return (m.speedManaged ?? []).includes(1);
+    });
+    assert('injected tab is recorded as managed (session store)',
+      ((await chrome.storage.session.get('speedManaged')).speedManaged ?? []).includes(1),
+      'speedManaged is missing tab 1');
+
+    mock.tabs.get(1)._elements[0].paused = true;
+    mock.fireUpdated(1, { audible: false });
+    await chrome.storage.session.set({ recent: [] });
+    await chrome.storage.session.remove('target');
+    await chrome.storage.local.set({ speed: 1 });
+    await until(() =>
+      mock.sentTabMessages.some((m) => m.tabId === 1 && m.msg.type === 'mcp-speed-disconnect'),
+    );
+    assert('global 1× reaches a managed tab that detection no longer lists',
+      mock.sentTabMessages.some((m) => m.tabId === 1 && m.msg.type === 'mcp-speed-disconnect'),
+      'no disconnect for the ineligible managed tab');
+    await until(async () => ((await chrome.storage.session.get('speedManaged')).speedManaged ?? []).length === 0);
+    assert('managed set empties once the policy lifts',
+      ((await chrome.storage.session.get('speedManaged')).speedManaged ?? []).length === 0,
+      'stale managed entries survived');
+
+    // --- global coverage: silent open tabs ------------------------------------------
+    // Tab 4 has never played, is not muted, not recent and not pinned — the
+    // old candidate model could not see it, yet global enforcement must reach
+    // it so media inserted later follows the policy.
+    await chrome.storage.session.set({ recent: [] });
+    await chrome.storage.session.remove('target');
+    await chrome.storage.local.set({ speed: 2 });
+    await until(() =>
+      mock.scriptingCalls.some(
+        (c) => c.target.tabId === 4 && c.func === 'installSpeedManager' && c.args?.[0]?.rate === 2,
+      ),
+    );
+    assert('global 2× installs the manager into a silent, unlisted open tab',
+      mock.scriptingCalls.some(
+        (c) => c.target.tabId === 4 && c.func === 'installSpeedManager' && c.args?.[0]?.rate === 2,
+      ),
+      `calls=${JSON.stringify(mock.scriptingCalls.slice(-4).map((c) => [c.target.tabId, c.func]))}`);
+    await chrome.storage.local.set({ speed: 1 });
+    await until(() =>
+      mock.sentTabMessages.some((m) => m.tabId === 4 && m.msg.type === 'mcp-speed-disconnect'),
+    );
+    assert('global reset disconnects the silent tab (no zombie manager)',
+      mock.sentTabMessages.some((m) => m.tabId === 4 && m.msg.type === 'mcp-speed-disconnect'),
+      'the silent tab kept its manager after the reset');
 
     // --- report ------------------------------------------------------------------
     for (const { name, ok, detail } of results) {

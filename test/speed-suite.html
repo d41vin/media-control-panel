@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Speed Suite</title>
+    <style>
+      body { font: 14px/1.5 system-ui, sans-serif; max-width: 720px; margin: 24px auto; padding: 0 16px; }
+      audio, video { display: block; margin: 8px 0; }
+    </style>
+  </head>
+  <body>
+    <h1>Speed regression fixture</h1>
+    <p>
+      Deterministic media for the speed matrix: every element runs a generated
+      180-second tone (no network, nothing ends mid-scenario). The
+      <code>mcpFix</code> API drives site-like behavior — native rate changes,
+      SPA-style element swaps, source reloads, pushState navigation.
+    </p>
+    <audio id="m0" controls></audio>
+    <audio id="m1" controls></audio>
+
+    <script>
+      // 16-bit 8 kHz mono WAV blob — ~2.9 MB per 180 s, built in memory
+      function makeWavUrl(seconds) {
+        const rate = 8000;
+        const n = Math.max(1, Math.round(seconds * rate));
+        const buf = new ArrayBuffer(44 + n * 2);
+        const v = new DataView(buf);
+        const wstr = (o, s) => {
+          for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i));
+        };
+        wstr(0, 'RIFF');
+        v.setUint32(4, 36 + n * 2, true);
+        wstr(8, 'WAVE');
+        wstr(12, 'fmt ');
+        v.setUint32(16, 16, true);
+        v.setUint16(20, 1, true);
+        v.setUint16(22, 1, true);
+        v.setUint32(24, rate, true);
+        v.setUint32(28, rate * 2, true);
+        v.setUint16(32, 2, true);
+        v.setUint16(34, 16, true);
+        wstr(36, 'data');
+        v.setUint32(40, n * 2, true);
+        for (let i = 0; i < n; i++) {
+          v.setInt16(44 + i * 2, Math.round(3000 * Math.sin((2 * Math.PI * 440 * i) / rate)), true);
+        }
+        return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+      }
+
+      const SRC = makeWavUrl(180);
+      const els = [...document.querySelectorAll('audio')];
+      for (const e of els) e.src = SRC;
+      let serial = 0;
+
+      window.mcpFix = {
+        SRC,
+        els,
+        async play(i = 0) {
+          await els[i].play();
+          return els[i].playbackRate;
+        },
+        pause(i = 0) {
+          els[i].pause();
+        },
+        // a native/player rate change, exactly as site JS would make it
+        rate(i, r) {
+          els[i].playbackRate = r;
+          return els[i].playbackRate;
+        },
+        // a "next video": a fresh element like SPA players swap in
+        newMedia(tag = 'audio', seconds = 180) {
+          const e = document.createElement(tag);
+          e.src = seconds === 180 ? SRC : makeWavUrl(seconds);
+          e.controls = true;
+          document.body.append(e);
+          els.push(e);
+          return els.length - 1;
+        },
+        // source reload on the same element — the load algorithm resets
+        // playbackRate to defaultPlaybackRate here
+        swapSrc(i = 0) {
+          els[i].src = SRC + '#s' + ++serial;
+          els[i].load();
+        },
+        remove(i) {
+          els[i].pause();
+          els[i].src = '';
+          els[i].remove();
+          els.splice(i, 1);
+        },
+        pushState(u) {
+          history.pushState({}, '', u);
+        },
+        playing() {
+          return els.map((e) => !e.paused && !e.ended);
+        },
+        rates() {
+          return els.map((e) => e.playbackRate);
+        },
+        defaults() {
+          return els.map((e) => e.defaultPlaybackRate);
+        },
+      };
+
+      // the tab title carries the query tag so the popup rows can be told apart
+      const tag = new URLSearchParams(location.search).get('t') || '';
+      document.title = 'Speed Suite ' + tag;
+    </script>
+  </body>
+</html>

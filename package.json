@@ -1,13 +1,16 @@
 {
   "name": "media-control-panel",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
-  "description": "A Swiss-minimal command center for every tab playing media — pure HTML/CSS/JS, no build step.",
+  "description": "A Swiss-minimal command center for every tab playing media — global speed, tab boost, pure HTML/CSS/JS, no build step.",
   "type": "module",
   "scripts": {
     "icons": "node scripts/make-icons.mjs",
     "serve": "node serve.mjs",
     "test": "node scripts/check.mjs",
+    "harness": "node scripts/harness.mjs",
+    "shots": "node scripts/screenshot.mjs",
+    "verify-capture": "node scripts/verify-capture.mjs",
     "e2e": "node scripts/e2e.mjs"
   }
 }

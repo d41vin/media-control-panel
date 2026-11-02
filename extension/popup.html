@@ -18,6 +18,20 @@
     </div>
   </header>
 
+  <section class="speedbar" aria-label="Global playback speed">
+    <span class="speedbar-label">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a9 9 0 0 0-9 9c0 2.2.8 4.2 2.1 5.8l1.5-1.3A6.9 6.9 0 0 1 5.1 13 6.9 6.9 0 1 1 17 18.4l1.4 1.5A9 9 0 0 0 12 4z"/><path d="m12.9 14.6-5.2-5.4 1.5-1.4 5 5.3a1.7 1.7 0 1 1-1.3 1.5z"/></svg>
+      Speed
+    </span>
+    <span id="gspeed-note" class="speedbar-note" hidden></span>
+    <div class="speedbar-cluster">
+      <button id="gspeed-dec" class="step-btn" type="button" title="Decrease global speed by 0.25&times;" aria-label="Decrease global speed">&minus;</button>
+      <span id="gspeed-value" class="speedbar-value" aria-live="polite">1.00&times;</span>
+      <button id="gspeed-inc" class="step-btn" type="button" title="Increase global speed by 0.25&times;" aria-label="Increase global speed">+</button>
+      <button id="gspeed-reset" class="step-btn reset" type="button" title="Reset global speed to 1.00&times;" aria-label="Reset global speed to 1.00&times;">&#8634;</button>
+    </div>
+  </section>
+
   <section id="settings" class="settings" inert>
     <div class="settings-inner">
       <div class="setting">
