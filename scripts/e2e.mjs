@@ -303,6 +303,22 @@ async function main() {
       : bad('card shows position readout without expansion', 'pos-readout never filled');
 
     // --- play/pause ---------------------------------------------------------
+    // The local 10 s tone may have ended while the card/probe assertions ran
+    // (slower machines); pageToggle then resumes a different element and the
+    // assertion below would be testing the wrong media. Restart the
+    // deterministic local tone first — a real user click path, not a shortcut.
+    const toneRestart = await evalIn(
+      cdp,
+      mediaSession,
+      `(async () => {
+         const a = document.querySelectorAll('audio')[0];
+         a.currentTime = 0;
+         try { await a.play(); return 'played'; } catch (e) { return 'blocked: ' + e.name; }
+       })()`,
+      true,
+    );
+    if (toneRestart !== 'played') note(`tone restart before play/pause: ${toneRestart}`);
+    await waitFor(() => evalIn(cdp, mediaSession, `!document.querySelectorAll('audio')[0].paused`));
     await evalIn(cdp, popupSession, `document.querySelector('.row .play').click()`);
     await waitFor(() => evalIn(cdp, mediaSession, `document.querySelectorAll('audio')[0].paused`));
     ok('row play button pauses the page media');
