@@ -582,6 +582,68 @@
     );
     delete window.__mcpSpeed;
 
+    // --- player-initialization writes are not page overrides -------------------------
+    // YouTube (and similar players) write their own default 1.00× while they
+    // take over a video. That write must not replace the global speed or an
+    // explicit page override; only a change made once the element has settled
+    // is a native/user choice.
+    mock.tabs.get(1)._elements[0].paused = false;
+    await chrome.storage.local.set({ speed: 2 });
+    await until(() => Math.abs(mock.tabs.get(1)._elements[0].playbackRate - 2) < 1e-6);
+    const settleEl = mock.tabs.get(1)._elements[0];
+    // the site's player re-initializes the just-attached element at 1.00×
+    settleEl.playbackRate = 1;
+    settleEl.dispatch('ratechange');
+    const settleHeld = await until(() => Math.abs(settleEl.playbackRate - 2) < 1e-6, 3000);
+    assert('a player initialization write (1.00×) is re-stamped, not adopted',
+      settleHeld === true &&
+        !(await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1],
+      `rate=${settleEl.playbackRate} overrides=${JSON.stringify((await chrome.storage.session.get('speedOverrides')).speedOverrides)}`);
+
+    // once the element has settled, a native rate change IS reported as a page
+    // change. (The mock has no real sender tab on a manager-originated message,
+    // so the worker drops the report; the E2E rig covers real adoption. The
+    // spy proves the manager classified the change correctly instead of
+    // swallowing it as setup.)
+    await new Promise((r) => setTimeout(r, 2200));
+    const speedReports = [];
+    const realSend = chrome.runtime.sendMessage;
+    chrome.runtime.sendMessage = async (msg, ...rest) => {
+      if (msg?.type === 'mcp-speed-report') speedReports.push(msg);
+      return realSend.call(chrome.runtime, msg, ...rest);
+    };
+    settleEl.playbackRate = 1.5;
+    settleEl.dispatch('ratechange');
+    const reportedNative = await until(() => speedReports.some((r) => Math.abs(r.rate - 1.5) < 1e-9), 2000);
+    assert('a native rate change after the settle window is reported as a page change (1.50×)',
+      reportedNative === true,
+      `reports=${JSON.stringify(speedReports)}`);
+
+    // an SPA "next video" re-initialises the element at 1.00×: the page
+    // override must survive and govern the replacement media. The override is
+    // set through the popup command path so the worker accepts it here.
+    speedReports.length = 0;
+    mock.fireMessage({ type: 'mcp-speed-page', tabId: 1, rate: 1.5 });
+    await until(() => Math.abs(settleEl.playbackRate - 1.5) < 1e-6);
+    settleEl.dispatch('emptied');
+    settleEl.dispatch('loadedmetadata');
+    settleEl.playbackRate = 1;
+    settleEl.dispatch('ratechange');
+    const replacementHeld = await until(() => Math.abs(settleEl.playbackRate - 1.5) < 1e-6, 3000);
+    chrome.runtime.sendMessage = realSend;
+    assert('replacement media keeps the page override across a player re-init (1.50×)',
+      replacementHeld === true &&
+        !speedReports.some((r) => Math.abs(r.rate - 1) < 1e-9) &&
+        (await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1]?.rate === 1.5,
+      `rate=${settleEl.playbackRate} reports=${JSON.stringify(speedReports)} overrides=${JSON.stringify((await chrome.storage.session.get('speedOverrides')).speedOverrides)}`);
+
+    // clean slate for the boost tests
+    mock.fireMessage({ type: 'mcp-speed-reset', tabId: 1 });
+    await chrome.storage.local.set({ speed: 1 });
+    await until(() =>
+      mock.sentTabMessages.some((m) => m.tabId === 1 && m.msg.type === 'mcp-speed-disconnect'),
+    );
+
     // --- boost: real-flow state truth ------------------------------------------------
     // The offscreen document here is the REAL offscreen.js running against the
     // deferred getUserMedia stub, so every transition goes through the actual
@@ -921,6 +983,26 @@
         (c) => c.target.tabId === 4 && c.func === 'installSpeedManager' && c.args?.[0]?.rate === 2,
       ),
       `calls=${JSON.stringify(mock.scriptingCalls.slice(-4).map((c) => [c.target.tabId, c.func]))}`);
+
+    // A tab CREATED while the policy is active must be governed immediately —
+    // the manual-test regression: global speed set first, new tab opened
+    // second, its media started at 1.00×.
+    const freshTab = mock.addTab({
+      title: 'Fresh tab after the policy',
+      url: 'https://fresh.example/watch',
+      elements: [{ tag: 'VIDEO', playing: false, time: 0, duration: 300 }],
+    });
+    await until(() =>
+      mock.scriptingCalls.some(
+        (c) => c.target.tabId === freshTab.id && c.func === 'installSpeedManager' && c.args?.[0]?.rate === 2,
+      ),
+    );
+    assert('a tab created after the global speed is set is injected at that rate',
+      mock.scriptingCalls.some(
+        (c) => c.target.tabId === freshTab.id && c.func === 'installSpeedManager' && c.args?.[0]?.rate === 2,
+      ),
+      `calls=${JSON.stringify(mock.scriptingCalls.slice(-4).map((c) => [c.target.tabId, c.func]))}`);
+    await chrome.tabs.remove(freshTab.id);
     await chrome.storage.local.set({ speed: 1 });
     await until(() =>
       mock.sentTabMessages.some((m) => m.tabId === 4 && m.msg.type === 'mcp-speed-disconnect'),

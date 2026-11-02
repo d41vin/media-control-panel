@@ -183,6 +183,21 @@ async function refreshSpeedState() {
   frameDocs = f.speedFrameDocs && typeof f.speedFrameDocs === 'object' ? f.speedFrameDocs : {};
 }
 
+// The worker's event listeners fire before the async startup IIFE below has
+// finished loading the policy. A tab event racing that load used to see the
+// factory defaults (global 1.00×, no overrides) and answer with a disconnect
+// — then nothing re-synced it. Every enforcement decision awaits this gate,
+// so a newly opened tab always sees the stored global speed, not a default.
+let speedStateReady = null;
+function ensureSpeedState() {
+  if (!speedStateReady) {
+    speedStateReady = refreshSpeedState().catch(() => {
+      speedStateReady = null; // retry on the next event
+    });
+  }
+  return speedStateReady;
+}
+
 async function persistCommitted() {
   try {
     await chrome.storage.session.set({ speedCommitted: committedDocs, speedFrameDocs: frameDocs });
@@ -282,6 +297,7 @@ function queueSpeedSync(fn) {
 }
 
 async function rawSyncSpeedTab(tabId, pageUrl, adoptForeign = true) {
+  await ensureSpeedState(); // never decide policy from unloaded defaults
   const url = pageUrl ?? (await safeTabUrl(tabId));
   if (url === null) {
     await clearOverride(tabId, false);
@@ -625,6 +641,8 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
 });
 
 async function routeMessage(msg, sender) {
+  // policy commands and reports never race the startup state load
+  if (msg.type.startsWith('mcp-speed-')) await ensureSpeedState();
   switch (msg.type) {
     // --- from page managers --------------------------------------------------
     case 'mcp-speed-report': {
@@ -872,6 +890,16 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
   }
 });
 
+// A tab created while a policy is active is a candidate immediately: the
+// initial about:blank may not be injectable, but recording the intent and
+// syncing early means the first injectable document (onCommitted/onUpdated
+// complete) finds the manager in place. This is what makes the global speed
+// reach tabs opened AFTER the speed was chosen, not only pre-existing tabs.
+chrome.tabs.onCreated.addListener((tab) => {
+  if (typeof tab.id !== 'number') return;
+  if (enforcementNeeded()) void syncSpeedTab(tab.id);
+});
+
 // Navigation identity, from the documented API. tabs.onUpdated sees every URL
 // change but cannot tell a committed navigation from a same-document SPA
 // transition — webNavigation can, and the override scope depends on it.
@@ -991,7 +1019,7 @@ chrome.runtime.onInstalled.addListener(() => {
   void chrome.action.setBadgeBackgroundColor({ color: '#e30613' });
   void chrome.action.setBadgeTextColor({ color: '#ffffff' });
   void refreshSettings();
-  void refreshSpeedState().then(() => syncSpeedEverywhere());
+  void ensureSpeedState().then(() => syncSpeedEverywhere());
 });
 
 // initial state after every worker start — the speed re-sync is what makes
@@ -1000,7 +1028,7 @@ chrome.runtime.onInstalled.addListener(() => {
 // truthful (cleared) state
 void (async () => {
   await refreshSettings();
-  await refreshSpeedState();
+  await ensureSpeedState();
   await refreshBoosts();
   await reconcileBoosts(true); // a fresh worker: no startup can be in flight
   await updateBadge();

@@ -121,6 +121,7 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
   let nextId = 1;
   const onUpdated = [];
   const onRemoved = [];
+  const onCreated = [];
   const onActivated = [];
   const storageChanged = [];
   const runtimeMessageHandlers = [];
@@ -137,6 +138,8 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
   const addTab = (def) => {
     const tab = fakeTab({ id: nextId++, ...def });
     tabs.set(tab.id, tab);
+    // like the real API: a created tab fires tabs.onCreated with its Tab
+    for (const fn of onCreated) fn({ ...tab, id: tab.id, windowId: tab.windowId, index: tab.index });
     return tab;
   };
 
@@ -272,6 +275,7 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
       },
       onUpdated: { addListener: (fn) => onUpdated.push(fn) },
       onRemoved: { addListener: (fn) => onRemoved.push(fn) },
+      onCreated: { addListener: (fn) => onCreated.push(fn) },
       onActivated: { addListener: (fn) => onActivated.push(fn) },
     },
 

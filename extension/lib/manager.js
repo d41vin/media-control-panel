@@ -2,10 +2,11 @@
 // into every injectable frame of a tab whenever a speed policy needs
 // enforcing (global speed ≠ 1.00×, or the page has an override).
 //
-// Event-driven by design: per-element `ratechange`/`play` listeners plus a
-// debounced MutationObserver for media added later. No polling loop. When no
-// policy needs enforcing the background sends 'mcp-speed-disconnect' and
-// every listener, observer and reference here is removed.
+// Event-driven by design: per-element `ratechange`/`play` listeners plus load
+// lifecycle events and a debounced MutationObserver for media added later. No
+// polling loop. When no policy needs enforcing the background sends
+// 'mcp-speed-disconnect' and every listener, observer and reference here is
+// removed.
 //
 // The rate model (mirrors lib/speed.js precedence rules):
 //   - `expected` is the rate this page should be at (override, else global).
@@ -19,6 +20,14 @@
 //     is remembered per element and restored on teardown.
 //   - Assignments we make produce ratechange events at `expected` — ignored
 //     via one echo credit per assignment, so there is no feedback loop.
+//   - A media element's lifecycle (attach, emptied, loadstart, metadata,
+//     canplay, playing) opens a short SETTLE window. A ratechange inside that
+//     window is the PLAYER initializing itself — YouTube (and other players)
+//     write their own default 1.00× when they take over a video — not a user
+//     choice. The policy is restored silently. Without this, a site's
+//     initialization write would be adopted as a page override and would
+//     overwrite both the global speed and an explicit page override on every
+//     SPA video change (the manual-test regressions).
 //   - Any OTHER observed rate is the page speaking: it is reported to the
 //     background (with rev), which adopts it as the page override (or drops
 //     the override when it lands exactly on the global rate). The extension
@@ -30,12 +39,18 @@
 //   - Media encountered at the default 1.00× is treated as untouched and
 //     receives `expected` (on injection, or when it starts playing). Media
 //     already running at a non-default rate is adopted instead of clobbered
-//     (adoption is what install-time and play-time encounters do).
+//     (adoption is what install-time and play-time encounters do) — unless
+//     the encounter happens while the element is still settling, which is
+//     the player's own initialization, not a choice.
 //
 // Serialization rules as lib/page.js: the export is fully self-contained —
 // no imports, no module-scope references — because executeScript serializes
 // it with Function.prototype.toString. It runs in the ISOLATED world, so
 // chrome.runtime messaging is available.
+//
+// NOTE: the settle duration below is a duration, not a polling interval. It
+// only bounds how long a fresh media element's rate writes are treated as
+// player setup; no timer runs after it expires.
 
 export function installSpeedManager(init) {
   // Re-injection (SW restart, repeated sync) updates the expectation in place
@@ -68,6 +83,17 @@ export function installSpeedManager(init) {
   // matcher checks a small ring of recently-assigned rates, not just the last.
   const echoCredits = new WeakMap();
   const sentRates = new WeakMap(); // el -> rates we assigned, most recent last
+  // el -> timestamp until which its rate writes are player initialization.
+  // Opened by attach and every load/play lifecycle event; YouTube's player
+  // writes its own default 1.00× while taking over a video, and that write
+  // must not be mistaken for a user's native speed choice.
+  const settleUntil = new WeakMap();
+  const SETTLE_MS = 2000;
+
+  const touch = (el) => {
+    settleUntil.set(el, performance.now() + SETTLE_MS);
+  };
+  const settling = (el) => performance.now() < (settleUntil.get(el) ?? 0);
 
   const collect = () => {
     const found = [...document.querySelectorAll('video, audio')];
@@ -98,11 +124,13 @@ export function installSpeedManager(init) {
    * adopt-on-play will report it) and takes the policy when the injection is
    * a user command (adoptForeign: false — a page-speed choice or a reset),
    * so a reset reaches paused media and cannot be undone by the old value.
+   * `force` bypasses the paused-media guard for a player-initialization
+   * write inside the settle window: that write is setup, not a choice.
    */
-  const applyTo = (el) => {
+  const applyTo = (el, force = false) => {
     if (unmanageable(el)) return;
     const playing = !el.paused && !el.ended;
-    if (!playing && S.adoptForeign) {
+    if (!playing && S.adoptForeign && !force) {
       const ours = typeof el.__mcpRate === 'number' && near(el.__mcpRate, el.playbackRate);
       if (!near(el.playbackRate, S.expected) && !near(el.playbackRate, 1) && !ours) return;
     }
@@ -154,10 +182,13 @@ export function installSpeedManager(init) {
     // `expected`. Media already running at any other rate made its own choice
     // and is adopted rather than clobbered — unless this injection came from
     // a per-page command (adoptForeign: false), in which case the user's
-    // fresh choice outranks whatever the element was doing.
+    // fresh choice outranks whatever the element was doing — or unless the
+    // element is still settling after load/play, in which case the rate is
+    // the player's own initialization and the page policy wins.
     if (near(el.playbackRate, S.expected)) return;
     const ours = typeof el.__mcpRate === 'number' && near(el.__mcpRate, el.playbackRate);
     if (near(el.playbackRate, 1) || ours || !S.adoptForeign) applyTo(el);
+    else if (settling(el)) applyTo(el, true);
     else report(el.playbackRate);
   };
 
@@ -172,15 +203,40 @@ export function installSpeedManager(init) {
       }
     }
     if (near(el.playbackRate, S.expected)) return; // page matched our policy
+    // A rate write during the element's load/play settling window is the
+    // player initializing itself (YouTube writes 1.00× for each new video).
+    // Restore the policy without reporting: it is not a user choice, and
+    // adopting it would overwrite the page override / global speed.
+    if (settling(el)) {
+      applyTo(el, true);
+      return;
+    }
     report(el.playbackRate); // the page (user or site JS) changed the rate
   };
 
-  const onPlay = (e) => adopt(e.target);
+  const onPlay = (e) => {
+    touch(e.target);
+    adopt(e.target);
+  };
+
+  // Load lifecycle: each event re-opens the settle window and re-stamps the
+  // policy, so a source swap (load algorithm) or a player re-init keeps both
+  // rates while the site sets up its new media.
+  const onLifecycle = (e) => {
+    const el = e.target;
+    if (unmanageable(el) || !S.list.includes(el)) return;
+    touch(el);
+    applyTo(el);
+  };
+
+  const LIFECYCLE = ['emptied', 'loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'playing'];
 
   const attach = (el) => {
     if (unmanageable(el) || S.list.includes(el)) return;
+    touch(el);
     el.addEventListener('ratechange', onRateChange);
     el.addEventListener('play', onPlay);
+    for (const type of LIFECYCLE) el.addEventListener(type, onLifecycle);
     S.list.push(el);
     adopt(el); // media already playing right now
   };
@@ -231,6 +287,7 @@ export function installSpeedManager(init) {
     for (const el of S.list) {
       el.removeEventListener('ratechange', onRateChange);
       el.removeEventListener('play', onPlay);
+      for (const type of LIFECYCLE) el.removeEventListener(type, onLifecycle);
     }
     // the policy is being lifted (global is back to 1.00×, no overrides):
     // media this extension moved to the old expected rate returns to 1.00× —

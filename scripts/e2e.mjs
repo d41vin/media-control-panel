@@ -460,6 +460,45 @@ async function main() {
     );
     ok('global speed applies to other tabs (multiple inheriting tabs)');
 
+    // --- new tabs opened AFTER the global speed was chosen -------------------------
+    // The manual repro: set 2.00×, open a fresh tab, play media. The tab must
+    // receive the current global policy on its first injectable document —
+    // and a player that writes its own default 1.00× during media setup must
+    // not be mistaken for a page override.
+    const freshTarget = await cdp.send('Target.createTarget', {
+      url: `http://127.0.0.1:${SERVE_PORT}/test/speed-suite.html?t=NEWGLOBAL`,
+    });
+    const freshSession = (await cdp.send('Target.attachToTarget', { targetId: freshTarget.targetId, flatten: true })).sessionId;
+    await waitFor(() => evalIn(cdp, freshSession, `!!window.mcpFix`), 15000);
+    await evalIn(cdp, freshSession, `mcpFix.play(0)`, true);
+    await waitFor(() =>
+      evalIn(cdp, freshSession, `Math.abs(mcpFix.rates()[0] - 2) < 0.01`),
+    );
+    ok('global 2.00× applies to a tab opened after the speed was chosen');
+    // the site's player re-initializes the media at its own default 1.00×
+    await evalIn(
+      cdp,
+      freshSession,
+      `(async () => { mcpFix.swapSrc(0); await mcpFix.play(0); mcpFix.rate(0, 1); return mcpFix.rates()[0]; })()`,
+      true,
+    );
+    await sleep(900);
+    const freshRateAfterInit = await evalIn(cdp, freshSession, `mcpFix.rates()[0]`);
+    const freshTabId = await evalIn(
+      cdp, swSession,
+      `chrome.tabs.query({url:'http://127.0.0.1:8080/test/speed-suite.html*'}).then(ts => ts.find(x => (x.url || '').includes('NEWGLOBAL'))?.id)`, true,
+    );
+    const freshOverrides = await evalIn(
+      cdp, swSession, `chrome.storage.session.get('speedOverrides').then(s => s.speedOverrides ?? {})`, true,
+    );
+    Math.abs(freshRateAfterInit - 2) < 0.01 && !freshOverrides[freshTabId]
+      ? ok('a player initialization write (1.00×) is re-stamped, not adopted as an override')
+      : bad(
+          'a player initialization write (1.00×) is re-stamped, not adopted as an override',
+          `rate=${freshRateAfterInit} override=${JSON.stringify(freshOverrides[freshTabId])}`,
+        );
+    await cdp.send('Target.closeTarget', { targetId: freshTarget.targetId });
+
     // --- per-page overrides ----------------------------------------------------------
     // Tab A = media-page (rows[0]), tab B = media-audio (rows[1]); both playing.
     if (!AUDIBLE_OK) {
@@ -1221,7 +1260,11 @@ async function main() {
       ? ok('speed-matrix 1b: policy stamped into defaultPlaybackRate (source reloads inherit)')
       : bad('speed-matrix 1b: policy stamped into defaultPlaybackRate (source reloads inherit)', `default=${stampedDefault}`);
 
-    // 2. native player speed 1.50× — adopted as the page override
+    // 2. native player speed 1.50× — adopted as the page override. Wait out
+    //    the player-settling window first: immediately after attach/play a
+    //    1.00×-style write is player setup, not a user choice (matrix 4/6
+    //    cover that side explicitly).
+    await sleep(2200);
     await evalIn(cdp, fix.A.session, `mcpFix.rate(0, 1.5)`);
     await waitSync(() => evalIn(cdp, pmS, rowExpr('A', `!r.querySelector('.rate-reset').hidden`)));
     const aReadout15 = await evalIn(cdp, pmS, rowExpr('A', `r.querySelector('.rate-readout').textContent`));
@@ -1257,10 +1300,25 @@ async function main() {
       true,
     );
     await waitSync(() => evalIn(cdp, fix.A.session, `Math.abs(mcpFix.rates()[2] - 1.5) < 0.01`));
+    // the site's player writes its own default rate while setting up the new
+    // video — exactly what YouTube does; the override must win. A source
+    // reload re-opens the player-settling window deterministically.
+    await evalIn(
+      cdp,
+      fix.A.session,
+      `(async () => { mcpFix.swapSrc(2); await mcpFix.play(2); mcpFix.rate(2, 1); })()`,
+      true,
+    );
+    await sleep(800);
+    const spaInitRate = await evalIn(cdp, fix.A.session, `mcpFix.rates()[2]`, true);
     const ovAfterSpa = await openOverrides();
+    Math.abs(spaInitRate - 1.5) < 0.01 &&
     Object.values(ovAfterSpa).some((o) => Math.abs(o.rate - 1.5) < 1e-9)
-      ? ok('speed-matrix 4: SPA video change keeps the page override; new element follows it (1.50×)')
-      : bad('speed-matrix 4: SPA video change keeps the page override; new element follows it (1.50×)', `overrides=${JSON.stringify(ovAfterSpa)}`);
+      ? ok('speed-matrix 4: SPA video change keeps the page override; player init write is re-stamped (1.50×)')
+      : bad(
+          'speed-matrix 4: SPA video change keeps the page override; player init write is re-stamped (1.50×)',
+          `rate=${spaInitRate} overrides=${JSON.stringify(ovAfterSpa)}`,
+        );
 
     // 5. extension stepper builds on the current effective rate
     await evalIn(cdp, pmS, rowExpr('A', `r.querySelector('.rate-inc').click()`));
@@ -1269,12 +1327,44 @@ async function main() {
     await waitSync(() => evalIn(cdp, fix.A.session, `Math.abs(mcpFix.rates()[0] - 1.5) < 0.01`));
     ok('speed-matrix 5: page stepper steps from the effective rate (1.50→1.75→1.50)');
 
-    // 6. reset to global: current media AND the next video follow 2.50×
+    // 6. reset to global: current media AND the next videos follow 2.50× —
+    //    including a player that writes 1.00× while setting each one up
     await evalIn(cdp, pmS, rowExpr('A', `r.querySelector('.rate-reset').click()`));
     await waitSync(() => evalIn(cdp, fix.A.session, `Math.abs(mcpFix.rates()[0] - 2.5) < 0.01`));
-    await evalIn(cdp, fix.A.session, `(async () => { const i = mcpFix.newMedia(); await mcpFix.play(i); })()`, true);
-    await waitSync(() => evalIn(cdp, fix.A.session, `Math.abs(mcpFix.rates()[3] - 2.5) < 0.01`));
-    ok('speed-matrix 6: reset-to-global re-applies 2.50× to current and next media');
+    let lastSpaIndex = await evalIn(
+      cdp,
+      fix.A.session,
+      `(async () => { const i = mcpFix.newMedia(); await mcpFix.play(i); return i; })()`,
+      true,
+    );
+    await waitSync(() => evalIn(cdp, fix.A.session, `Math.abs(mcpFix.rates()[${lastSpaIndex}] - 2.5) < 0.01`));
+    // now that the manager owns the element, the player re-loads the source
+    // and initializes it at 1× — the policy must be re-stamped
+    await evalIn(
+      cdp,
+      fix.A.session,
+      `(async () => { mcpFix.swapSrc(${lastSpaIndex}); await mcpFix.play(${lastSpaIndex}); mcpFix.rate(${lastSpaIndex}, 1); })()`,
+      true,
+    );
+    await waitSync(() => evalIn(cdp, fix.A.session, `Math.abs(mcpFix.rates()[${lastSpaIndex}] - 2.5) < 0.01`));
+    // repeated replacement videos: every one keeps the reset policy
+    for (let k = 0; k < 3; k++) {
+      lastSpaIndex = await evalIn(
+        cdp,
+        fix.A.session,
+        `(async () => { const i = mcpFix.newMedia(); await mcpFix.play(i); return i; })()`,
+        true,
+      );
+      await waitSync(() => evalIn(cdp, fix.A.session, `Math.abs(mcpFix.rates()[${lastSpaIndex}] - 2.5) < 0.01`));
+      await evalIn(
+        cdp,
+        fix.A.session,
+        `(async () => { mcpFix.swapSrc(${lastSpaIndex}); await mcpFix.play(${lastSpaIndex}); mcpFix.rate(${lastSpaIndex}, 1); })()`,
+        true,
+      );
+      await waitSync(() => evalIn(cdp, fix.A.session, `Math.abs(mcpFix.rates()[${lastSpaIndex}] - 2.5) < 0.01`));
+    }
+    ok('speed-matrix 6: reset-to-global survives repeated SPA video replacement (2.50×)');
 
     // 7. native 1.00× under global 2.50× is a real override (matrix #7)
     await evalIn(cdp, fix.A.session, `mcpFix.rate(0, 1)`);
@@ -1328,16 +1418,21 @@ async function main() {
     ok('speed-matrix 9: media paused across a global change inherits on resume (B 3.75×)');
 
     // 10. one element ends while a policy change is in flight (matrix #10)
-    await evalIn(
+    const endingIndex = await evalIn(
       cdp,
       fix.A.session,
-      `(async () => { mcpFix.newMedia('audio', 2); const i = mcpFix.els.length - 1; await mcpFix.play(i); return i; })()`,
+      `(async () => { const i = mcpFix.newMedia('audio', 2); await mcpFix.play(i); return i; })()`,
       true,
     );
     await evalIn(cdp, pmS, rowExpr('A', `r.querySelector('.rate-dec').click()`));
-    await waitSync(() => evalIn(cdp, fix.A.session, `mcpFix.els[4].ended`));
-    await evalIn(cdp, fix.A.session, `(async () => { const i = mcpFix.newMedia(); await mcpFix.play(i); })()`, true);
-    await waitSync(() => evalIn(cdp, fix.A.session, `Math.abs(mcpFix.rates()[5] - 0.85) < 0.01`));
+    await waitSync(() => evalIn(cdp, fix.A.session, `mcpFix.els[${endingIndex}].ended`));
+    const nextIndex = await evalIn(
+      cdp,
+      fix.A.session,
+      `(async () => { const i = mcpFix.newMedia(); await mcpFix.play(i); return i; })()`,
+      true,
+    );
+    await waitSync(() => evalIn(cdp, fix.A.session, `Math.abs(mcpFix.rates()[${nextIndex}] - 0.85) < 0.01`));
     ok('speed-matrix 10: media ending mid-command does not strand the next element (follows 0.85×)');
 
     // 11. popup close/reopen cycles keep state truthful (matrix #11)
@@ -1451,6 +1546,9 @@ async function main() {
     await waitSync(() => evalIn(cdp, pmS, `document.getElementById('gspeed-value').textContent === '2.00×'`));
     await waitSync(() => evalIn(cdp, frameSession, `Math.abs(mcpFrame().els[0].playbackRate - 2) < 0.01`));
     ok('global speed reaches media inside an iframe (allFrames manager)');
+    // wait out the player-settling window: a rate write immediately after the
+    // manager attaches is setup, not a user choice (see speed-matrix 4/6)
+    await sleep(2200);
     await evalIn(cdp, frameSession, `mcpFrame().rate(0, 1.5)`);
     await waitSync(async () => {
       const ov = await openOverrides();
