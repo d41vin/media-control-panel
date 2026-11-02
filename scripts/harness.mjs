@@ -201,24 +201,79 @@ async function main() {
            withMedia.querySelector('.rate-inc').click();
            await new Promise((r) => setTimeout(r, 150));
          }
+         // appearance: all three preferences repaint through html[data-theme]
+         document.getElementById('settings-toggle').click();
+         const theme = {};
+         for (const value of ['dark', 'light', 'system']) {
+           document.querySelector('[data-theme-value="' + value + '"]').click();
+           await new Promise((r) => setTimeout(r, 80));
+           theme[value] = {
+             attr: document.documentElement.dataset.theme,
+             paper: getComputedStyle(document.documentElement).getPropertyValue('--paper').trim(),
+             stored: (await chrome.storage.local.get('settings')).settings?.theme,
+           };
+         }
+         // slider increments
+         const first = document.querySelector('.row');
+         const volStep = first.querySelector('.vol').step;
+         const boostStep = first.querySelector('.boost').step;
+         // quick mute must stay muted while the ping loop runs
+         first.querySelector('.mute').click();
+         await new Promise((r) => setTimeout(r, 3300));
+         const mute = {
+           aria: first.querySelector('.mute').getAttribute('aria-label'),
+           badge: !first.querySelector('.eq-muted').hidden,
+           browser: chrome._mock.tabs.get(1).mutedInfo.muted,
+         };
+         first.querySelector('.mute').click();
+         await new Promise((r) => setTimeout(r, 200));
+         mute.afterUnmute = first.querySelector('.mute').getAttribute('aria-label');
          return {
            rows: rows.length,
            gspeed: document.getElementById('gspeed-value').textContent,
            overridden: rows.some((r) => r.querySelector('.speed-cluster').classList.contains('overridden')),
+           theme,
+           volStep,
+           boostStep,
+           mute,
          };
        })()`,
       true,
     );
     // let any async fallout surface
     await sleep(800);
+    const themeOk =
+      pmState?.theme?.dark?.attr === 'dark' &&
+      pmState.theme.dark.paper === '#141414' &&
+      pmState.theme.dark.stored === 'dark' &&
+      pmState.theme.light?.attr === 'light' &&
+      pmState.theme.light.paper === '#ffffff' &&
+      pmState.theme.light.stored === 'light' &&
+      pmState.theme.system?.attr === 'system' &&
+      pmState.theme.system.stored === 'system';
+    const stepsOk = pmState?.volStep === '0.05' && pmState?.boostStep === '10';
+    const muteOk =
+      pmState?.mute?.aria === 'Unmute tab' &&
+      pmState.mute.badge === true &&
+      pmState.mute.browser === true &&
+      pmState.mute.afterUnmute === 'Mute tab';
     if (cdp.pageErrors.length) {
       failed = true;
       for (const e of cdp.pageErrors) console.error(`FAIL  popup-mock page error: ${e}`);
     } else if (pmRows < 1 || !pmState.gspeed.startsWith('1.25')) {
       failed = true;
       console.error(`FAIL  popup-mock smoke: rows=${pmRows} state=${JSON.stringify(pmState)}`);
+    } else if (!themeOk || !stepsOk || !muteOk) {
+      failed = true;
+      console.error(
+        `FAIL  popup-mock behavior: theme=${themeOk} steps=${stepsOk} mute=${muteOk} state=${JSON.stringify(pmState)}`,
+      );
     } else {
       console.log(`  ok  popup-mock smoke: ${pmRows} row(s), global ${pmState.gspeed}, override shown: ${pmState.overridden}`);
+      console.log(
+        `  ok  popup-mock settings: theme dark/light/system repaint, vol step ${pmState.volStep}, boost step ${pmState.boostStep}`,
+      );
+      console.log('  ok  popup-mock quick mute stays muted for 3.3 s (browser + UI)');
     }
 
     if (failed) process.exitCode = 1;

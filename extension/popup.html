@@ -36,6 +36,17 @@
     <div class="settings-inner">
       <div class="setting">
         <div class="setting-text">
+          <span id="set-theme-label" class="setting-label">Appearance</span>
+          <p>System follows your browser's theme.</p>
+        </div>
+        <div class="segmented" role="radiogroup" aria-labelledby="set-theme-label">
+          <button type="button" class="seg" data-theme-value="system" role="radio" aria-checked="true">System</button>
+          <button type="button" class="seg" data-theme-value="light" role="radio" aria-checked="false">Light</button>
+          <button type="button" class="seg" data-theme-value="dark" role="radio" aria-checked="false">Dark</button>
+        </div>
+      </div>
+      <div class="setting">
+        <div class="setting-text">
           <label for="set-autopause">Auto-pause on open</label>
           <p>Pauses every playing tab when the popup opens.</p>
         </div>

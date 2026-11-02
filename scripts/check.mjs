@@ -94,6 +94,10 @@ for (const ref of ['popup.css', 'popup.js']) {
   else ok(`popup.html references ${ref}`);
   if (!existsSync(join(ext, ref))) fail(`missing file: ${ref}`);
 }
+for (const theme of ['system', 'light', 'dark']) {
+  if (!html.includes(`data-theme-value="${theme}"`)) fail(`appearance selector missing "${theme}"`);
+}
+ok('appearance selector offers System, Light and Dark');
 
 // 5. injected functions are self-contained (no module-scope references that
 //    would break after toString serialization)

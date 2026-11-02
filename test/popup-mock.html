@@ -7,6 +7,9 @@
   <style>
     /* The real popup.css styles body as the 440px popup; in the harness the
        popup lives in a frame next to the fake-browser controls. */
+    html {
+      background: #7a7a7a;
+    }
     body {
       width: auto;
       max-height: none;
@@ -29,17 +32,6 @@
       font-size: 13px;
       line-height: 1.35;
       outline: 1px solid #000;
-    }
-    .popup-frame.light {
-      --paper: #ffffff;
-      --card: #ffffff;
-      --ink: #111111;
-      --muted: #6f6f6f;
-      --faint: #b5b5b5;
-      --hairline: #e4e4e4;
-      --hover: #f4f4f4;
-      --accent: #e30613;
-      --art-badge: rgba(255, 255, 255, 0.88);
     }
     .controls {
       font: 13px/1.6 system-ui, sans-serif;
@@ -92,6 +84,17 @@
     <div class="settings-inner">
       <div class="setting">
         <div class="setting-text">
+          <span id="set-theme-label" class="setting-label">Appearance</span>
+          <p>System follows your browser's theme.</p>
+        </div>
+        <div class="segmented" role="radiogroup" aria-labelledby="set-theme-label">
+          <button type="button" class="seg" data-theme-value="system" role="radio" aria-checked="true">System</button>
+          <button type="button" class="seg" data-theme-value="light" role="radio" aria-checked="false">Light</button>
+          <button type="button" class="seg" data-theme-value="dark" role="radio" aria-checked="false">Dark</button>
+        </div>
+      </div>
+      <div class="setting">
+        <div class="setting-text">
           <label for="set-autopause">Auto-pause on open</label>
           <p>Pauses every playing tab when the popup opens.</p>
         </div>
@@ -135,7 +138,7 @@
     <div id="tab-controls"></div>
     <button id="new-media">+ new tab starts playing</button>
     <button id="tick-once">advance 1s</button>
-    <button id="dark">toggle dark</button>
+    <button id="dark">toggle theme</button>
   </div>
 
   <!-- Deferred modules run in document order: this installer runs before popup.js. -->
@@ -293,8 +296,10 @@
       mock.fireUpdated(id, { audible: true });
     };
     document.getElementById('tick-once').onclick = () => mock.tick();
-    document.getElementById('dark').onclick = () =>
-      document.getElementById('popup-frame').classList.toggle('light');
+    document.getElementById('dark').onclick = () => {
+      const root = document.documentElement;
+      root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+    };
     setInterval(() => mock.tick(), 1000);
   </script>
 

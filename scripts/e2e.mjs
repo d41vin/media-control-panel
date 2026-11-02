@@ -938,14 +938,26 @@ async function main() {
     await pressArrow('ArrowUp', 38);
     const afterUp = await sliderState();
     const onSlider = (s) => s.on.includes('vol');
-    afterDown.onSlider = onSlider(afterDown) && Math.abs(afterDown.val - 0.49) < 0.001;
+    afterDown.onSlider = onSlider(afterDown) && Math.abs(afterDown.val - 0.45) < 0.001;
     afterUp.onSlider = onSlider(afterUp) && Math.abs(afterUp.val - 0.5) < 0.001;
     afterDown.onSlider
-      ? ok('ArrowDown adjusts the focused slider, focus stays (was: row navigation stole it)')
-      : bad('ArrowDown adjusts the focused slider, focus stays', JSON.stringify(afterDown));
+      ? ok('ArrowDown adjusts the focused volume slider by 5 % (0.50 → 0.45), focus stays')
+      : bad('ArrowDown adjusts the focused volume slider by 5 % (0.50 → 0.45), focus stays', JSON.stringify(afterDown));
     afterUp.onSlider
-      ? ok('ArrowUp adjusts the focused slider back, focus stays')
-      : bad('ArrowUp adjusts the focused slider back, focus stays', JSON.stringify(afterUp));
+      ? ok('ArrowUp adjusts the focused volume slider back by 5 % (focus stays)')
+      : bad('ArrowUp adjusts the focused volume slider back by 5 % (focus stays)', JSON.stringify(afterUp));
+    const sliderSteps = await evalIn(
+      cdp,
+      popupSession2,
+      `({
+         vol: { step: document.querySelector('.row .vol').step, min: document.querySelector('.row .vol').min, max: document.querySelector('.row .vol').max },
+         boost: { step: document.querySelector('.row .boost').step, min: document.querySelector('.row .boost').min, max: document.querySelector('.row .boost').max },
+       })`,
+    );
+    sliderSteps?.vol?.step === '0.05' && sliderSteps.vol.min === '0' && sliderSteps.vol.max === '1' &&
+    sliderSteps?.boost?.step === '10' && sliderSteps.boost.min === '100' && sliderSteps.boost.max === '600'
+      ? ok('slider increments: volume 0–100 % in 5 % steps, boost 100–600 % in 10 % steps')
+      : bad('slider increments: volume 0–100 % in 5 % steps, boost 100–600 % in 10 % steps', JSON.stringify(sliderSteps));
     await evalIn(cdp, popupSession2, `document.activeElement.blur()`); // release dragGuard
 
     // --- commands registered ----------------------------------------------------------
@@ -1146,6 +1158,63 @@ async function main() {
     );
     panelOpen ? ok('settings panel opens from the header') : bad('settings panel opens from the header', 'panel not open');
 
+    // --- appearance: System / Light / Dark, applied and persisted ----------------
+    const defaultTheme = await evalIn(
+      cdp,
+      popupSession2,
+      `({ attr: document.documentElement.dataset.theme, stored: null, system: matchMedia('(prefers-color-scheme: dark)').matches })`,
+    );
+    defaultTheme.attr === 'system'
+      ? ok('appearance defaults to System')
+      : bad('appearance defaults to System', JSON.stringify(defaultTheme));
+    const setTheme = async (value) => {
+      await evalIn(cdp, popupSession2, `document.querySelector('[data-theme-value="${value}"]').click()`);
+      await sleep(220);
+      return evalIn(
+        cdp,
+        popupSession2,
+        `(async () => {
+           const s = await chrome.storage.local.get('settings');
+           const prev = document.querySelector('.row .prev');
+           return {
+             attr: document.documentElement.dataset.theme,
+             stored: s.settings?.theme,
+             paper: getComputedStyle(document.documentElement).getPropertyValue('--paper').trim(),
+             card: getComputedStyle(document.documentElement).getPropertyValue('--card').trim(),
+             htmlBg: getComputedStyle(document.documentElement).backgroundColor,
+             bodyBg: getComputedStyle(document.body).backgroundColor,
+             bodyRadius: getComputedStyle(document.body).borderRadius,
+             cardRadius: document.querySelector('.row .card') ? getComputedStyle(document.querySelector('.row .card')).borderRadius : null,
+             disabledColor: prev ? getComputedStyle(prev).color : null,
+             warnColor: getComputedStyle(document.querySelector('.row .boost-warn')).color,
+             checked: document.querySelector('[data-theme-value="${value}"]').getAttribute('aria-checked'),
+           };
+         })()`,
+        true,
+      );
+    };
+    const lightTheme = await setTheme('light');
+    lightTheme.attr === 'light' && lightTheme.stored === 'light' && lightTheme.paper === '#ffffff' &&
+    lightTheme.card === '#ffffff' && lightTheme.disabledColor === 'rgb(181, 181, 181)' && lightTheme.checked === 'true' &&
+    lightTheme.htmlBg === 'rgb(255, 255, 255)' && lightTheme.bodyBg === lightTheme.htmlBg &&
+    lightTheme.bodyRadius === '14px' && lightTheme.cardRadius === '12px'
+      ? ok('Light applies to the stage, cards and disabled controls (persisted); frame gap-free, inner surface rounded')
+      : bad('Light applies to the stage, cards and disabled controls (persisted); frame gap-free, inner surface rounded', JSON.stringify(lightTheme));
+    const darkTheme = await setTheme('dark');
+    darkTheme.attr === 'dark' && darkTheme.stored === 'dark' && darkTheme.paper === '#141414' &&
+    darkTheme.card === '#1b1b1b' && darkTheme.disabledColor === 'rgb(90, 90, 90)' &&
+    darkTheme.warnColor === 'rgb(154, 154, 154)' && darkTheme.checked === 'true' &&
+    darkTheme.htmlBg === 'rgb(20, 20, 20)' && darkTheme.bodyBg === darkTheme.htmlBg &&
+    darkTheme.bodyRadius === '14px' && darkTheme.cardRadius === '12px'
+      ? ok('Dark applies to the stage, cards, popovers and disabled controls (persisted); frame gap-free, inner surface rounded')
+      : bad('Dark applies to the stage, cards, popovers and disabled controls (persisted); frame gap-free, inner surface rounded', JSON.stringify(darkTheme));
+    const systemTheme = await setTheme('system');
+    systemTheme.attr === 'system' && systemTheme.stored === 'system' && systemTheme.checked === 'true'
+      ? ok('System remains selectable and is stored as the preference')
+      : bad('System remains selectable and is stored as the preference', JSON.stringify(systemTheme));
+    // leave Dark stored: the reopen below proves it survives a popup cycle
+    await setTheme('dark');
+
     await evalIn(cdp, popupSession2, `document.getElementById('set-autopause').click()`);
     const autoPauseStored = await evalIn(
       cdp,
@@ -1164,6 +1233,28 @@ async function main() {
     const popupSession3 = (await cdp.send('Target.attachToTarget', { targetId: popup3.targetId, flatten: true })).sessionId;
     await waitFor(() => evalIn(cdp, mediaSession, `document.querySelectorAll('audio')[0].paused`));
     ok('auto-pause on open pauses playing media');
+
+    // the appearance preference survives the popup close/reopen cycle
+    const reopenedTheme = await evalIn(
+      cdp,
+      popupSession3,
+      `(async () => {
+         const s = await chrome.storage.local.get('settings');
+         return {
+           attr: document.documentElement.dataset.theme,
+           stored: s.settings?.theme,
+           paper: getComputedStyle(document.documentElement).getPropertyValue('--paper').trim(),
+         };
+       })()`,
+      true,
+    );
+    reopenedTheme.attr === 'dark' && reopenedTheme.stored === 'dark' && reopenedTheme.paper === '#141414'
+      ? ok('Dark preference survives popup close/reopen')
+      : bad('Dark preference survives popup close/reopen', JSON.stringify(reopenedTheme));
+    // return to the default so the rest of the run is appearance-neutral
+    await evalIn(cdp, popupSession3, `document.getElementById('settings-toggle').click()`);
+    await evalIn(cdp, popupSession3, `document.querySelector('[data-theme-value="system"]').click()`);
+    await sleep(200);
 
     // From here on, nothing may depend on Chrome clearing tab.audible: in
     // headless the flag can latch after an injected pause. So the badge

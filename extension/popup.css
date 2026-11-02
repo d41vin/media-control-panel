@@ -1,8 +1,10 @@
 /* Media Control Panel — Swiss design system, media-card layout.
-   Tokens first, then structure. Rounded 14 px popup stage (Chromium paints
-   the extension bubble from the document, so a rounded body with a
-   transparent html background rounds the popup itself), 12 px cards on a
-   440 px stage, hairlines, one accent that only ever marks meaning. */
+   Tokens first, then structure. Rounded 12 px cards on a 440 px stage,
+   hairlines, one accent that only ever marks meaning.
+   Appearance: System follows prefers-color-scheme; the Settings selector
+   sets data-theme="light"|"dark" on <html>. Every component (cards,
+   popovers, switches, sliders, disabled controls) reads these tokens, so
+   one attribute repaints the whole surface. */
 
 :root {
   --paper: #ffffff;
@@ -16,10 +18,11 @@
   --art-badge: rgba(255, 255, 255, 0.88);
   --radius-stage: 14px;
   --radius-card: 12px;
+  color-scheme: light dark;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --paper: #141414;
     --card: #1b1b1b;
     --ink: #f2f2f2;
@@ -32,16 +35,44 @@
   }
 }
 
+html[data-theme='dark'] {
+  --paper: #141414;
+  --card: #1b1b1b;
+  --ink: #f2f2f2;
+  --muted: #9a9a9a;
+  --faint: #5a5a5a;
+  --hairline: #2b2b2b;
+  --hover: #242424;
+  --accent: #ff3b30;
+  --art-badge: rgba(20, 20, 20, 0.88);
+  color-scheme: dark;
+}
+
+html[data-theme='light'] {
+  --paper: #ffffff;
+  --card: #ffffff;
+  --ink: #111111;
+  --muted: #6f6f6f;
+  --faint: #b5b5b5;
+  --hairline: #e4e4e4;
+  --hover: #f4f4f4;
+  --accent: #e30613;
+  --art-badge: rgba(255, 255, 255, 0.88);
+  color-scheme: light;
+}
+
 * {
   box-sizing: border-box;
   scrollbar-width: thin;
   scrollbar-color: var(--hairline) transparent;
 }
 
-/* transparent beyond the stage radius: the popup's own corners are the
-   document's corners — no fake inner-shadow pretending the frame is round */
+/* The browser owns the action-popup frame and paints it square; Chrome/Edge
+   offer no CSS hook for it. Keep the theme colour on the document itself so
+   the square frame and the rounded body never show a mismatched gap, and
+   keep the rounded cards/popovers inside as the designed surface. */
 html {
-  background: transparent;
+  background: var(--paper);
 }
 
 html,
@@ -252,7 +283,7 @@ button {
 }
 
 .settings.open {
-  max-height: 220px;
+  max-height: 320px;
   opacity: 1;
   border-bottom: 1px solid var(--hairline);
 }
@@ -265,16 +296,62 @@ button {
   padding: 10px 14px 0;
 }
 
-.setting-text label {
+.setting-text label,
+.setting-text .setting-label {
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
+}
+
+.setting-text .setting-label {
+  cursor: default;
 }
 
 .setting-text p {
   margin: 1px 0 0;
   font-size: 11px;
   color: var(--muted);
+}
+
+/* --- appearance segmented control --------------------------------------------- */
+
+.segmented {
+  flex: none;
+  display: inline-flex;
+  border: 1px solid var(--faint);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.seg {
+  padding: 4px 8px;
+  background: var(--paper);
+  border: 0;
+  border-left: 1px solid var(--hairline);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.seg:first-child {
+  border-left: 0;
+}
+
+.seg:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--hover);
+}
+
+.seg[aria-checked='true'] {
+  color: var(--paper);
+  background: var(--ink);
+}
+
+.seg:disabled {
+  color: var(--faint);
+  cursor: default;
 }
 
 /* sharp Swiss switch: square track, square knob, ink when on */

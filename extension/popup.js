@@ -25,7 +25,7 @@ import {
   pagePiP,
 } from './lib/page.js';
 import { adapterFor } from './lib/adapters.js';
-import { DEFAULT_SETTINGS, loadSettings, saveSettings } from './lib/settings.js';
+import { DEFAULT_SETTINGS, THEMES, loadSettings, saveSettings } from './lib/settings.js';
 import {
   SPEED_MIN,
   SPEED_MAX,
@@ -52,6 +52,7 @@ const settingInputs = {
   badge: document.getElementById('set-badge'),
   recentTabs: document.getElementById('set-recent'),
 };
+const themeButtons = [...document.querySelectorAll('[data-theme-value]')];
 const gspeedValue = document.getElementById('gspeed-value');
 const gspeedDec = document.getElementById('gspeed-dec');
 const gspeedInc = document.getElementById('gspeed-inc');
@@ -348,7 +349,9 @@ function makeRow(tab) {
   vol.type = 'range';
   vol.min = '0';
   vol.max = '1';
-  vol.step = '0.01';
+  // predictable increments: 5 % per pointer/keyboard step. Values written
+  // back from the page are still displayed truthfully (see syncCard).
+  vol.step = '0.05';
   vol.setAttribute('aria-label', 'Volume');
   volPop.append(volPopHead, vol);
 
@@ -526,8 +529,11 @@ function wireCard(rec) {
 
   n.vol.addEventListener('input', () => {
     setFill(n.vol);
-    n.volReadout.textContent = `${Math.round(parseFloat(n.vol.value) * 100)}%`;
-    rec.pendingVolume = parseFloat(n.vol.value);
+    // the range's step is 0.05: the value is already on the 5 % grid, so the
+    // readout and the page volume agree exactly
+    const value = Number(parseFloat(n.vol.value).toFixed(2));
+    n.volReadout.textContent = `${Math.round(value * 100)}%`;
+    rec.pendingVolume = value;
     if (rec.volTimer === undefined) {
       rec.volTimer = setTimeout(() => {
         rec.volTimer = undefined;
@@ -1396,6 +1402,19 @@ function pruneRecentOnlyRows() {
 async function changeSetting(key, value) {
   settings = await saveSettings({ ...settings, [key]: value });
   if (key === 'recentTabs' && !value) pruneRecentOnlyRows();
+  return settings;
+}
+
+/** Apply the appearance preference to the whole popup surface. */
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = THEMES.includes(theme) ? theme : 'system';
+}
+
+/** Reflect the stored preference on the segmented control. */
+function renderTheme() {
+  for (const btn of themeButtons) {
+    btn.setAttribute('aria-checked', String(btn.dataset.themeValue === settings.theme));
+  }
 }
 
 // --- probe ------------------------------------------------------------------------
@@ -1574,6 +1593,8 @@ async function init() {
     chrome.storage.session.get(['target', 'recent', 'speedOverrides', 'boosts']).catch(() => ({})),
   ]);
   settings = await loadSettings();
+  applyTheme(settings.theme);
+  renderTheme();
   globalSpeed = await loadGlobalSpeed();
   overrides = new Map(
     Object.entries(
@@ -1590,6 +1611,20 @@ async function init() {
     input.checked = settings[key];
     input.addEventListener('change', () => void changeSetting(key, input.checked));
   }
+  for (const btn of themeButtons) {
+    btn.addEventListener('click', () => {
+      const theme = btn.dataset.themeValue;
+      if (settings.theme === theme) return;
+      // optimistic repaint; storage confirms through its change event
+      settings = { ...settings, theme };
+      applyTheme(theme);
+      renderTheme();
+      void changeSetting('theme', theme).then(() => {
+        applyTheme(settings.theme);
+        renderTheme();
+      });
+    });
+  }
   gspeedDec.addEventListener('click', () => void changeGlobalSpeed(globalSpeed - SPEED_STEP));
   gspeedInc.addEventListener('click', () => void changeGlobalSpeed(globalSpeed + SPEED_STEP));
   gspeedReset.addEventListener('click', () => void changeGlobalSpeed(SPEED_DEFAULT));
@@ -1603,6 +1638,16 @@ async function init() {
   // keep popup state in sync with the stores the background owns: global
   // speed, page overrides, boost truth, and the pinned target
   chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes.settings) {
+      // another popup context (or a manual write) changed a preference:
+      // adopt the stored truth and repaint the surface
+      void loadSettings().then((s) => {
+        settings = s;
+        applyTheme(s.theme);
+        renderTheme();
+        for (const [key, input] of Object.entries(settingInputs)) input.checked = s[key];
+      });
+    }
     if (area === 'local' && changes.speed) {
       // while our own serialized writes are in flight, an event carrying an
       // older value is a late echo of an earlier click — never a newer truth

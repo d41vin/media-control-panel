@@ -10,7 +10,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
   badge: true,
   // paused media tabs stay listed for this browser session
   recentTabs: true,
+  // appearance: follow the OS/browser, or force light/dark
+  theme: 'system',
 });
+
+export const THEMES = ['system', 'light', 'dark'];
 
 function normalize(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
@@ -18,6 +22,7 @@ function normalize(raw) {
   for (const key of Object.keys(DEFAULT_SETTINGS)) {
     out[key] = typeof src[key] === 'boolean' ? src[key] : DEFAULT_SETTINGS[key];
   }
+  out.theme = THEMES.includes(src.theme) ? src.theme : DEFAULT_SETTINGS.theme;
   return out;
 }
 
