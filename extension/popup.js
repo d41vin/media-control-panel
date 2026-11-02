@@ -905,7 +905,9 @@ function updateRow(rec) {
   nodes.prevBtn.title = rec.adapter
     ? known?.prev && !known.prev.found
       ? 'This site has no previous-track control'
-      : 'Previous track'
+      : known?.prev?.disabled
+        ? 'No previous track'
+        : 'Previous track'
     : 'Previous track — not available on this site';
   nodes.nextBtn.title = rec.adapter
     ? known?.next && !known.next.found

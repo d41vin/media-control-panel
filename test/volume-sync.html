@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Volume Sync</title>
+  <style>
+    body { font: 14px/1.6 system-ui, sans-serif; max-width: 640px; margin: 24px auto; padding: 0 16px; }
+    audio { display: block; margin: 8px 0 20px; }
+    .site-player { border: 1px solid #ccc; border-radius: 8px; padding: 12px 16px; }
+    .site-player output { font-weight: 700; font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+  <h1>Volume Sync fixture</h1>
+  <p>
+    A minimal site-like player: its own volume indicator is driven ONLY by the
+    standard media-element <code>volumechange</code> event. If the extension's
+    volume command reaches the element, the site's UI follows — no
+    site-specific adapter involved.
+  </p>
+  <audio src="media/tone.wav" loop controls></audio>
+  <div class="site-player">
+    <span>Site volume</span>
+    <output id="site-volume-indicator">100%</output>
+  </div>
+
+  <script>
+    const audio = document.querySelector('audio');
+    const indicator = document.getElementById('site-volume-indicator');
+    let events = 0;
+
+    // This is the whole "site integration": a normal volumechange listener.
+    audio.addEventListener('volumechange', () => {
+      events++;
+      indicator.textContent = Math.round(audio.volume * 100) + '%';
+    });
+
+    window.mcpVolume = {
+      audio,
+      events: () => events,
+      indicator: () => indicator.textContent,
+      play: () => audio.play(),
+      setSiteVolume(v) {
+        audio.volume = Math.min(1, Math.max(0, v));
+      },
+    };
+
+    document.title = 'Volume Sync';
+  </script>
+</body>
+</html>

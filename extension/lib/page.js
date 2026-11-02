@@ -26,9 +26,24 @@ export function pageProbe(site) {
       return { found: false, disabled: true };
     }
     if (!b) return { found: false, disabled: true };
+    // A site can express "no previous track" in more than one way: a real
+    // disabled attribute, aria-disabled, or (YouTube) a hidden button. All of
+    // them mean the control is unavailable, so the popup disables its own
+    // button instead of clicking a no-op.
+    let invisible = false;
+    try {
+      invisible =
+        b.hidden === true ||
+        b.getAttribute('aria-hidden') === 'true' ||
+        (typeof b.getClientRects === 'function' && b.getClientRects().length === 0) ||
+        (typeof getComputedStyle === 'function' &&
+          (getComputedStyle(b).display === 'none' || getComputedStyle(b).visibility === 'hidden'));
+    } catch {
+      // non-Element stand-ins (mock harnesses) have no layout; treat visible
+    }
     return {
       found: true,
-      disabled: !!(b.disabled || b.getAttribute('aria-disabled') === 'true'),
+      disabled: !!(b.disabled || b.getAttribute('aria-disabled') === 'true' || invisible),
     };
   };
   const els = (() => {
@@ -92,9 +107,22 @@ export function pagePing(site) {
       return { found: false, disabled: true };
     }
     if (!b) return { found: false, disabled: true };
+    // keep this identical to pageProbe's checker: disabled, aria-disabled and
+    // hidden all mean the site's control is unavailable
+    let invisible = false;
+    try {
+      invisible =
+        b.hidden === true ||
+        b.getAttribute('aria-hidden') === 'true' ||
+        (typeof b.getClientRects === 'function' && b.getClientRects().length === 0) ||
+        (typeof getComputedStyle === 'function' &&
+          (getComputedStyle(b).display === 'none' || getComputedStyle(b).visibility === 'hidden'));
+    } catch {
+      // non-Element stand-ins (mock harnesses) have no layout; treat visible
+    }
     return {
       found: true,
-      disabled: !!(b.disabled || b.getAttribute('aria-disabled') === 'true'),
+      disabled: !!(b.disabled || b.getAttribute('aria-disabled') === 'true' || invisible),
     };
   };
   const els = (() => {

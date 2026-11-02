@@ -889,6 +889,92 @@ async function main() {
       ? ok('youtube adapter clicks the site next button')
       : bad('youtube adapter clicks the site next button', JSON.stringify(adapterClick));
 
+    // --- adapter disabled-state truth (supported site, first video, no control) -----
+    const adapterStates = await evalIn(
+      cdp,
+      mediaSession,
+      `(async () => {
+         const { pageProbe } = await import('/extension/lib/page.js');
+         const { adapterFor } = await import('/extension/lib/adapters.js');
+         const b = document.createElement('button');
+         b.className = 'ytp-prev-button';
+         document.body.append(b);
+         const probe = () => pageProbe({ next: '.ytp-next-button', prev: '.ytp-prev-button' }).siteButtons.prev;
+         const states = {};
+         states.visible = probe();
+         b.setAttribute('aria-disabled', 'true');
+         states.aria = probe();
+         b.removeAttribute('aria-disabled');
+         b.disabled = true;
+         states.disabled = probe();
+         b.disabled = false;
+         b.style.display = 'none';
+         states.hidden = probe();
+         b.remove();
+         states.absent = probe();
+         const hosts = ['https://www.youtube.com/watch?v=x', 'https://open.spotify.com/track/1', 'https://soundcloud.com/a/b', 'https://www.netflix.com/watch/1', 'https://example.com/x']
+           .map((u) => [u, !!adapterFor(u)]);
+         return { states, hosts };
+       })()`,
+      true,
+    );
+    const as = adapterStates?.states;
+    const hostsOk =
+      JSON.stringify(adapterStates?.hosts?.map((h) => h[1])) === JSON.stringify([true, true, true, false, false]);
+    as?.visible?.found && as.visible.disabled === false &&
+    as?.aria?.disabled === true && as?.disabled?.disabled === true &&
+    as?.hidden?.disabled === true && as?.absent?.found === false && as.absent.disabled === true && hostsOk
+      ? ok('adapter availability: enabled only for a real, enabled site button; hidden/aria-disabled/disabled/absent all disable')
+      : bad('adapter availability: enabled only for a real, enabled site button', JSON.stringify(adapterStates));
+
+    // --- site volume indicator follows the standard volumechange event --------------
+    // The fixture's own UI is driven only by the media element's volumechange
+    // event. If this moves, a site that follows the standard needs no adapter.
+    const volSyncTarget = await cdp.send('Target.createTarget', {
+      url: `http://127.0.0.1:${SERVE_PORT}/test/volume-sync.html`,
+    });
+    const volSyncSession = (await cdp.send('Target.attachToTarget', { targetId: volSyncTarget.targetId, flatten: true })).sessionId;
+    await waitFor(() => evalIn(cdp, volSyncSession, `!!window.mcpVolume`));
+    await evalIn(cdp, volSyncSession, `mcpVolume.play().catch(() => {})`);
+    const volSyncTabId = await evalIn(
+      cdp, swSession,
+      `chrome.tabs.query({url:'http://127.0.0.1:8080/test/volume-sync.html'}).then(t => t[0]?.id)`, true,
+    );
+    await seedRecent(volSyncTabId);
+    await evalIn(cdp, popupSession2, `location.reload()`);
+    await waitFor(() =>
+      evalIn(
+        cdp,
+        popupSession2,
+        `[...document.querySelectorAll('.row')].some(r => r.querySelector('.t-title').textContent.includes('Volume Sync'))`,
+      ),
+    );
+    const volSyncRow = `[...document.querySelectorAll('.row')].find(r => r.querySelector('.t-title').textContent.includes('Volume Sync'))`;
+    await evalIn(cdp, popupSession2, `(${volSyncRow}).querySelector('.vol-btn').click()`);
+    await evalIn(
+      cdp,
+      popupSession2,
+      `(() => { const v = (${volSyncRow}).querySelector('.vol'); v.value = '0.4'; v.dispatchEvent(new Event('input', { bubbles: true })); })()`,
+    );
+    const siteFollowed = await waitFor(async () => {
+      const state = await evalIn(
+        cdp, volSyncSession,
+        `({ events: mcpVolume.events(), indicator: mcpVolume.indicator(), volume: mcpVolume.audio.volume })`, true,
+      );
+      return state.events > 0 && state.indicator === '40%' && Math.abs(state.volume - 0.4) < 0.001 ? state : null;
+    }).catch(() => null);
+    siteFollowed
+      ? ok('site volume indicator follows the standard volumechange event (no site adapter)')
+      : bad(
+          'site volume indicator follows the standard volumechange event (no site adapter)',
+          JSON.stringify(await evalIn(cdp, volSyncSession, `({ events: mcpVolume.events(), indicator: mcpVolume.indicator(), volume: mcpVolume.audio.volume })`, true)),
+        );
+    const volSyncReadout = await evalIn(cdp, popupSession2, `(${volSyncRow}).querySelector('.vol-readout').textContent`);
+    volSyncReadout === '40%'
+      ? ok('popup volume readout matches the selected 5 % step value')
+      : bad('popup volume readout matches the selected 5 % step value', `readout=${volSyncReadout}`);
+    await cdp.send('Target.closeTarget', { targetId: volSyncTarget.targetId });
+
     // --- keyboard navigation ----------------------------------------------------------
     const keyNav = await evalIn(
       cdp,

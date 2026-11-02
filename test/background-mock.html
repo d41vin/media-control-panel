@@ -19,6 +19,8 @@
   <script type="module">
     import { installMockChrome, faviconSvg } from './mock-chrome.js';
     import { fmtSpeed } from '../extension/lib/speed.js';
+    import { pageProbe } from '../extension/lib/page.js';
+    import { adapterFor } from '../extension/lib/adapters.js';
 
     const out0 = document.getElementById('out');
     window.addEventListener('error', (e) => {
@@ -550,6 +552,59 @@
       fmtBad.length === 0,
       `mismatched: ${JSON.stringify(fmtBad.map(([r]) => [r, fmtSpeed(r)]))}`,
     );
+
+    // --- track-adapter availability (site buttons as the page really has them) ------
+    // A site's "no previous track" state is expressed as disabled, aria-disabled
+    // or a hidden button (YouTube hides the prev control on the first video).
+    // All three must disable the popup control; an absent button must report
+    // found:false so the card can explain it.
+    const siteNext = document.createElement('button');
+    siteNext.className = 'ytp-next-button';
+    const sitePrev = document.createElement('button');
+    sitePrev.className = 'ytp-prev-button';
+    document.body.append(siteNext, sitePrev);
+    const probeButtons = () =>
+      pageProbe({ next: '.ytp-next-button', prev: '.ytp-prev-button' }).siteButtons;
+    const visibleState = probeButtons();
+    assert('adapter probe: visible enabled site buttons are enabled',
+      visibleState.next.found && !visibleState.next.disabled &&
+        visibleState.prev.found && !visibleState.prev.disabled,
+      `state=${JSON.stringify(visibleState)}`);
+    sitePrev.disabled = true;
+    const disabledState = probeButtons();
+    assert('adapter probe: a disabled previous button disables the control',
+      disabledState.prev.disabled === true,
+      `state=${JSON.stringify(disabledState)}`);
+    sitePrev.disabled = false;
+    sitePrev.setAttribute('aria-disabled', 'true');
+    const ariaState = probeButtons();
+    assert('adapter probe: aria-disabled disables the control',
+      ariaState.prev.disabled === true,
+      `state=${JSON.stringify(ariaState)}`);
+    sitePrev.removeAttribute('aria-disabled');
+    sitePrev.style.display = 'none';
+    const hiddenState = probeButtons();
+    assert('adapter probe: a hidden previous button (YouTube first video) disables the control',
+      hiddenState.prev.disabled === true,
+      `state=${JSON.stringify(hiddenState)}`);
+    sitePrev.remove();
+    const absentState = probeButtons();
+    assert('adapter probe: an absent site button reports found:false, disabled',
+      absentState.prev.found === false && absentState.prev.disabled === true,
+      `state=${JSON.stringify(absentState)}`);
+    siteNext.remove();
+
+    const adapterHosts = [
+      ['https://www.youtube.com/watch?v=x', true],
+      ['https://open.spotify.com/track/1', true],
+      ['https://soundcloud.com/artist/track', true],
+      ['https://www.netflix.com/watch/1', false],
+      ['https://example.com/video', false],
+    ];
+    const badHosts = adapterHosts.filter(([url, want]) => !!adapterFor(url) !== want);
+    assert('adapter selection: supported hosts enable controls, unsupported hosts do not',
+      badHosts.length === 0,
+      `mismatched=${JSON.stringify(badHosts.map(([u]) => u))}`);
 
     // --- defaultPlaybackRate stamping (R4, the load-algorithm defense) --------------
     // The manager runs for real against the mock's fake elements (rebound
