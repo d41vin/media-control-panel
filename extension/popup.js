@@ -192,6 +192,15 @@ function primaryOfProbe(probe) {
 // --- cards ----------------------------------------------------------------------------
 
 function makeRow(tab) {
+  // A tab can be adopted by an onUpdated event while init() is still walking
+  // its query snapshot. Reuse the existing card instead of appending a second
+  // one: a duplicate DOM row would keep stale control state (the mute icon in
+  // particular), because rows.get(tabId) can only address one record.
+  const existing = rows.get(tab.id);
+  if (existing) {
+    applyTabState(existing, tab);
+    return existing;
+  }
   const li = el('li', 'row');
   const card = el('div', 'card');
 
@@ -472,6 +481,8 @@ function makeRow(tab) {
     // must never flip self.mediaPlaying back — the phantom-playback guard.
     commandAt: 0,
     commandPending: false,
+    /** when this row's last explicit mute command was issued (stale reads lose) */
+    muteCommandAt: 0,
     dragging: false,
     volTimer: undefined,
     pendingVolume: null,
@@ -801,6 +812,50 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 // --- card rendering --------------------------------------------------------------------
 
+/**
+ * Fold authoritative tabs.* fields into a row. `chrome.tabs.update` resolves
+ * with the post-change Tab, and focus reconciles read `chrome.tabs.get`, so
+ * the mute icon (and every other tab-derived readout) reflects the browser,
+ * not a possibly-missed event.
+ */
+function applyTabState(rec, tab) {
+  if (!rec || !tab) return;
+  if (tab.url !== undefined) rec.tab.url = tab.url;
+  if (tab.title !== undefined) rec.tab.title = tab.title;
+  if (tab.favIconUrl !== undefined) rec.tab.favIconUrl = tab.favIconUrl;
+  if (tab.audible !== undefined) rec.tab.audible = tab.audible;
+  if (tab.mutedInfo !== undefined) rec.tab.mutedInfo = tab.mutedInfo;
+  if (tab.index !== undefined) rec.tab.index = tab.index;
+  updateRow(rec);
+  refreshChrome();
+}
+
+/**
+ * Re-read every listed tab once. Event-driven callers only (popup focus and
+ * right after a mute command) — this is not a polling loop.
+ */
+let reconcileInFlight = null;
+function reconcileTabState() {
+  if (reconcileInFlight) return reconcileInFlight;
+  const startedAt = Date.now();
+  reconcileInFlight = Promise.allSettled(
+    [...rows.values()].map(async (rec) => {
+      try {
+        const tab = await chrome.tabs.get(rec.tab.id);
+        // a mute command issued after this read began owns the row's state
+        if (rows.get(rec.tab.id) === rec && startedAt >= rec.muteCommandAt) {
+          applyTabState(rec, tab);
+        }
+      } catch {
+        // tab gone; tabs.onRemoved owns the cleanup
+      }
+    }),
+  ).finally(() => {
+    reconcileInFlight = null;
+  });
+  return reconcileInFlight;
+}
+
 function updateRow(rec) {
   const { tab, nodes } = rec;
   const host = hostOf(tab.url);
@@ -1105,12 +1160,23 @@ async function pauseAll() {
 async function muteAll() {
   const allMuted = rows.size > 0 && [...rows.values()].every((r) => r.tab.mutedInfo?.muted);
   const target = !allMuted;
+  // Apply the resolved Tab of each update immediately (same truth the
+  // onUpdated event carries), so the header label and every card stay in
+  // sync even if an event is missed while the popup regains focus.
   await Promise.allSettled(
     [...rows.values()]
       .filter((r) => !!r.tab.mutedInfo?.muted !== target)
-      .map((r) => chrome.tabs.update(r.tab.id, { muted: target }).catch(() => {})),
+      .map(async (r) => {
+        try {
+          r.muteCommandAt = Date.now();
+          const updated = await chrome.tabs.update(r.tab.id, { muted: target });
+          if (updated) applyTabState(r, updated);
+        } catch {
+          // tab gone; onRemoved cleans up
+        }
+      }),
   );
-  // rows re-render from the mutedInfo events
+  await reconcileTabState();
 }
 
 async function togglePin(rec) {
@@ -1277,13 +1343,25 @@ async function runAdapter(rec, direction) {
 
 async function muteTab(rec) {
   if (!rec) return;
-  const muted = !rec.tab.mutedInfo?.muted;
+  // Read the browser's real state before toggling: the card can be a stale
+  // snapshot (the tab strip, a keyboard command or another context can mute
+  // it), and a toggle computed from a stale icon would issue the wrong
+  // command. One authoritative read, one update — never a repeated mute.
+  let tab;
   try {
-    await chrome.tabs.update(rec.tab.id, { muted });
+    tab = await chrome.tabs.get(rec.tab.id);
   } catch {
-    // tab may be gone
+    return; // tab gone
   }
-  // state arrives via tabs.onUpdated (mutedInfo)
+  const muted = !tab.mutedInfo?.muted;
+  rec.muteCommandAt = Date.now();
+  try {
+    const updated = await chrome.tabs.update(rec.tab.id, { muted });
+    applyTabState(rec, updated ?? { ...tab, mutedInfo: { muted, reason: 'extension' } });
+  } catch {
+    // the command did not land: fall back to the browser's truth
+    void reconcileTabState();
+  }
 }
 
 /** Injection target: the primary frame when probed, all frames otherwise. */
@@ -1385,18 +1463,23 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
     }
     return;
   }
-  if (info.title !== undefined) rec.tab.title = info.title;
-  if (info.url !== undefined) rec.tab.url = info.url;
-  if (info.favIconUrl !== undefined) rec.tab.favIconUrl = info.favIconUrl;
-  if (info.audible !== undefined) rec.tab.audible = info.audible;
-  if (info.mutedInfo !== undefined) rec.tab.mutedInfo = info.mutedInfo;
-  updateRow(rec);
-  refreshChrome();
+  // The event payload is authoritative for the fields it carries, and
+  // applyTabState is the single truth path for tab-derived controls.
+  applyTabState(rec, info);
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   removeRow(tabId);
 });
+
+// An action popup can lose and regain focus (or the popup-as-page document
+// can be backgrounded). Re-read the listed tabs once on return instead of
+// trusting a possibly-missed event; this is focus-driven, not a poll.
+const reconcileOnReturn = () => {
+  if (document.visibilityState !== 'hidden') void reconcileTabState();
+};
+window.addEventListener('focus', reconcileOnReturn);
+document.addEventListener('visibilitychange', reconcileOnReturn);
 
 // --- keyboard navigation -------------------------------------------------------------
 //

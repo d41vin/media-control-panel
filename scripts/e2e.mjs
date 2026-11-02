@@ -610,9 +610,68 @@ async function main() {
       : bad('no speed oscillation (A stable at 2.75× across 1.5s)', `rates=${rates}`);
 
     // --- mute / global actions ------------------------------------------------------
+    // Quick mute must stay muted: sample the BROWSER state and the POPUP icon
+    // over the window where the manual report saw a revert. The event log
+    // proves whether any extension path unmuted the tab.
+    const muteTabId = await evalIn(
+      cdp, swSession,
+      `chrome.tabs.query({url:'http://127.0.0.1:8080/test/media-page.html'}).then(t => t[0].id)`, true,
+    );
+    await evalIn(
+      cdp, swSession,
+      `(() => {
+         globalThis.__muteLog = [];
+         chrome.tabs.onUpdated.addListener((id, info) => {
+           if (info.mutedInfo) globalThis.__muteLog.push({ id, muted: info.mutedInfo.muted, reason: info.mutedInfo.reason, t: Date.now() });
+         });
+         return true;
+       })()`,
+    );
     await evalIn(cdp, popupSession, `${row(0)}.querySelector('.mute').click()`);
-    await waitFor(() => evalIn(cdp, swSession, `chrome.tabs.query({muted:true}).then(t => t.length >= 1)`));
+    await waitFor(() =>
+      evalIn(cdp, swSession, `chrome.tabs.get(${muteTabId}).then(t => !!t.mutedInfo?.muted)`, true),
+    );
     ok('row mute mutes the tab (tabs API, no injection)');
+    const muteSamples = [];
+    let muteElapsed = 0;
+    for (const at of [0, 500, 1000, 3000]) {
+      if (at > muteElapsed) await sleep(at - muteElapsed);
+      muteElapsed = at;
+      const browser = await evalIn(
+        cdp, swSession, `chrome.tabs.get(${muteTabId}).then(t => t.mutedInfo)`, true,
+      );
+      const ui = await evalIn(
+        cdp,
+        popupSession,
+        `(() => {
+           const r = ${row(0)};
+           return r ? { aria: r.querySelector('.mute').getAttribute('aria-label'), badge: !r.querySelector('.eq-muted').hidden } : null;
+         })()`,
+      );
+      muteSamples.push({ at, browser, ui });
+    }
+    const muteStable = muteSamples.every(
+      (s) => s.browser?.muted === true && s.browser?.reason === 'extension' && s.ui?.aria === 'Unmute tab' && s.ui?.badge === true,
+    );
+    const muteLog = await evalIn(cdp, swSession, `globalThis.__muteLog`, true);
+    const muteReverted = (muteLog ?? []).some((e) => e.id === muteTabId && e.muted === false);
+    muteStable && !muteReverted
+      ? ok('quick mute stays muted for 3 s — browser state and popup icon agree (no unmute event)')
+      : bad('quick mute stays muted for 3 s — browser state and popup icon agree (no unmute event)', JSON.stringify({ muteSamples, muteLog }));
+    // element volume and boost are independent controls; changing volume while
+    // the tab is muted must not unmute it
+    await evalIn(
+      cdp,
+      popupSession,
+      `(() => { const v = ${row(0)}.querySelector('.vol'); v.value = '0.4'; v.dispatchEvent(new Event('input', {bubbles:true})); })()`,
+    );
+    await sleep(500);
+    const muteAfterVolume = await evalIn(
+      cdp, swSession, `chrome.tabs.get(${muteTabId}).then(t => t.mutedInfo)`, true,
+    );
+    muteAfterVolume?.muted === true
+      ? ok('element volume is independent of tab mute — the mute stays')
+      : bad('element volume is independent of tab mute — the mute stays', JSON.stringify(muteAfterVolume));
     await evalIn(cdp, popupSession, `${row(0)}.querySelector('.mute').click()`);
     await waitFor(() => evalIn(cdp, swSession, `chrome.tabs.query({muted:true}).then(t => t.length === 0)`));
     ok('row unmute restores the tab');
