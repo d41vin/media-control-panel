@@ -1,9 +1,11 @@
 # Manual verification checklist
 
 How to test every feature by hand and what to expect. The automated layers
-(`npm test`, `npm run harness`, `npm run e2e`, the mock harnesses) cover most
-of this — this checklist is the human pass on real Chrome with real sites,
-and it is the only place where **actual audibility** can be judged.
+(`npm test`, `npm run harness`, `npm run e2e`, `npm run youtube-check`) cover
+most of this — this checklist is the human pass on real Chrome with real
+sites, and it is the only place where **actual audibility** can be judged.
+Chrome is the primary verified browser (the suites also run in Edge via
+`MCP_BROWSER=edge`).
 
 **Setup:** `chrome://extensions` → Developer mode → **Load unpacked** → select
 `extension/`. After every code update click **Reload** on the extension card
@@ -34,13 +36,13 @@ and reopen the popup (stale assets are the #1 "it's broken" cause).
 | 14 | PiP | Click `PIP` on a video card | Floating video window; button accent while active; click again to return. No PiP button on audio-only cards |
 | 15 | Track adapters | Open YouTube / Spotify / SoundCloud | `⏮` `⏭` flank the timeline on that card only; `⏭`/`⏮` skip tracks. On the first playlist video YouTube hides its prev button and the popup's `⏮` is disabled (hidden/aria-disabled/disabled all count) |
 | 16 | Tab mute | Click the speaker icon in the card head | Tab silenced **without pausing**; struck-speaker badge appears; hold for 3+ s — it stays muted, the icon stays struck, and the tab strip agrees. Unmute restores . The popover's `TAB AUDIO` row shows and toggles the same state |
-| 17 | Mute all / Unmute all | Two tabs playing → `MUTE ALL` | Both muted; label flips to `UNMUTE ALL`; click restores |
+| 17 | Mute tabs / Unmute tabs | Two tabs playing → `MUTE TABS` | Browser tab audio muted in both; label flips to `UNMUTE TABS`; click restores. The players' own mute state is untouched |
 | 18 | Pause all | `PAUSE ALL` | Every playing tab pauses, embeds included |
 | 19 | Badge | Play media in two tabs | Badge shows `2`; pause both → badge disappears |
 | 20 | Pin target | Menu → `Pin as target` | Card border turns accent; footer `TARGET · site`; menu reads `Unpin target` |
 | 21 | Keyboard: target | With a pin, press `Alt+Shift+Space` anywhere | Pinned tab's media toggles without the popup |
 | 22 | Keyboard: pause all | Press `Alt+Shift+P` | Every playing tab pauses, embeds included |
-| 23 | Keyboard: mute all | Press `Alt+Shift+M` twice | All audible tabs mute, then extension-muted tabs unmute |
+| 23 | Keyboard: mute tabs | Press `Alt+Shift+M` twice | Browser tab audio muted everywhere audible, then the extension-muted tabs unmute (player mute states untouched) |
 | 24 | Keyboard: rows | Focus a card's play button, press `↓` / `↑` | Focus walks cards with a visible ring, wrapping at the ends |
 | 25 | Keyboard: seek | Focus a card, press `→` then `←` | Media skips +10 s / −10 s |
 | 26 | Keyboard vs sliders | Tab to any slider, press all four arrows | Slider adjusts with ↑ ↓ ← →; no card navigation, no ±10 s seek fires |
@@ -122,8 +124,8 @@ and reopen the popup (stale assets are the #1 "it's broken" cause).
 roots and WebAudio-only playback are invisible to every extension in this
 category; `chrome://` pages can be muted but not controlled; MediaStream
 (`srcObject`) live previews cannot hold a playbackRate and are skipped by the
-speed manager; browsers may claim a suggested shortcut (Edge takes
-`Alt+Shift+P`) — remap at `chrome://extensions/shortcuts`; the speed manager
+speed manager; the browser or OS may claim a suggested shortcut
+(remap at `chrome://extensions/shortcuts`); the speed manager
 adopts a page-originated rate change after the media has settled, including a
 site re-applying the rate last chosen in its own menu on a later video (the
 browser does not expose the difference) — writes made while a new video is

@@ -161,7 +161,7 @@ command matrix plus the speed-policy and boost state machines.
 
 - `npm test` — static checks (module syntax, manifest sanity, icons, references, and a guard
   that injected functions stay serialization-safe).
-- `npm run harness` — runs both mock pages in headless Edge: 79 background assertions
+- `npm run harness` — runs both mock pages in headless Chrome (Edge via `MCP_BROWSER=edge`): 79 background assertions
   (commands, badge, speed-policy coordination including policy revisions, documentId
   scoping for SPA/reload/hash transitions and frame-aware report provenance, silent-
   tab coverage, tabs created after the global speed is set, player-initialization
@@ -173,12 +173,14 @@ command matrix plus the speed-policy and boost state machines.
   tab-close cleanup) plus a popup pass that checks all three appearance options,
   the 5 %/10 % slider steps, a 3.3 s quick-mute stability window, the volume popover's two
   independent audio truths, and the player-API sync wiring.
-- `npm run youtube-check` — real-site verification on youtube.com in a headed Edge window with
-  the extension loaded (needs internet): the full mute matrix (extension/native, active/background,
-  activation, popup reopen), tab-vs-player independence, and actual playback at 2× / 2.5× / 4× /
-  8× / 16× (the media element's real rate, not the site menu's cap).
-- `npm run e2e` — launches a real Chromium browser (Edge via CDP — branded Chrome 137+ ignores
-  `--load-extension`) with the unpacked extension loaded, opens the popup as an extension page,
+- `npm run youtube-check` — real-site verification on youtube.com in a headed Chrome window with
+  the extension loaded (needs internet; Edge via `MCP_BROWSER=edge`): the full mute matrix
+  (extension/native, active/background, activation, popup reopen), tab-vs-player independence,
+  and actual playback at 2× / 2.5× / 4× / 8× / 16× (the media element's real rate, not the site
+  menu's cap).
+- `npm run e2e` — launches real Google Chrome (via CDP; branded Chrome 137+ ignores
+  `--load-extension`, so the unpacked extension is loaded through the DevTools `Extensions` domain
+  after connect; Edge via `MCP_BROWSER=edge`), opens the popup as an extension page,
   and drives 122 end-to-end assertions: detection, titles, play/pause/resume, exclusive playback,
   seek, volume, the global and per-page speed policy, mute (browser state and icon sampled over
   3 s, with an unmute-event check), global actions, badge, pin, boost plumbing and gating,
@@ -200,7 +202,7 @@ command matrix plus the speed-policy and boost state machines.
   adopted as the page override (with child-frame navigation keeping the top-level override and
   top-level navigation clearing it), and a silent tab receiving global speed for dynamically
   inserted media (then returning to normal after reset).
-- `npm run verify-capture` — opens a real headed Edge window and probes what the capture API
+- `npm run verify-capture` — opens a real headed browser window and probes what the capture API
   actually allows (popup click flow, a reset → restart cycle with real mouse input, a real
   active boost across same-tab and cross-origin navigation, and a reset after navigation, then
   raw `getMediaStreamId` checks); records the outcome without asserting it.
@@ -326,11 +328,13 @@ is built the way it is.
   Chromium clamps the write — so the manager skips them entirely.
 - **Site volume indicators** are owned by the site. The extension writes the media element's
   `volume`; the browser then fires the standard `volumechange` event, which any site (including
-  the test fixture) can use to move its own slider. Sites that keep a private volume model and
-  ignore that event — YouTube's player is the reported case — will keep showing their own value.
-  There is no extension API to drive another page's custom slider, and a site-specific hack
-  would break whenever that player changes; the popup's own readout always reflects the real
-  element volume. The element volume itself is audibly applied either way.
+  the test fixture) can use to move its own slider. Sites that ignore that event and keep a
+  private volume model are synchronized only through a feature-detected adapter: on YouTube the
+  extension calls the first-party player's **internal** methods (`#movie_player`, the same
+  method names the IFrame API uses). These are **not** the official YouTube IFrame Player API,
+  are undocumented and may change; when they are absent the element write still applies and the
+  popup readout stays the truthful source. Verified: the volume indicator follows on the
+  environment's current youtube.com build (see `npm run youtube-check`).
 - Boost gain is per-tab and multiplicative with element volume and tab mute: muting the tab
   mutes the boosted output too. High boost levels may distort; a limiter tames but does not
   eliminate it.
@@ -338,6 +342,6 @@ is built the way it is.
   `tabCapture` works, for every extension in this category. Boost **starts** are limited to
   the viewed tab (the platform's `activeTab` rule); once started, the capture is a tab-level
   setting and continues across navigation until reset or tab close.
-- The action-popup frame is owned by the browser and is square on Chrome/Edge; CSS cannot
+- The action-popup frame is owned by the browser and is square on Chrome; CSS cannot
   round it. The document paints the same theme colour to the frame, so there is no gap, and
   the cards/popovers keep their rounded internal surface.

@@ -232,10 +232,11 @@ them. The volume popover names both, side by side, each row its own toggle:
   first-party player is the reported case — ignores element writes in its
   UI, and some builds actively REASSERT their internal mute model over
   element writes (sometimes only on tab activation). It is synchronized
-  through its documented API surface (`#movie_player`, the method names the
-  official IFrame Player API exposes) by adapter capabilities that run in
-  the MAIN world (the API lives on page-world objects the isolated world
-  cannot see), host-gated to known hosts and feature-detected:
+  through the player's INTERNAL methods (`#movie_player`, the same method
+  names the IFrame Player API uses — NOT the official API, undocumented,
+  and changeable) by adapter capabilities that run in the MAIN world (those
+  objects live in the page world), host-gated to known hosts and
+  feature-detected; every failure path falls back to the element:
   - `syncPlayer` — the direction is per channel, because ownership is per
     channel. **Rate/volume: ELEMENT → API** (the manager/slider write the
     element; the site UI follows its own model). **Mute: PLAYER → ELEMENT**

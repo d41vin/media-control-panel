@@ -68,6 +68,12 @@ function scPrev() {
 /**
  * MAIN world. Squaring the player's private state with the media element.
  *
+ * NOTE: YouTube's first-party player methods used here are INTERNAL —
+ * the same names the IFrame Player API uses, but not the official API, not
+ * documented, and able to change without notice. They are feature-detected
+ * on the player element; without them the extension falls back to the media
+ * element, which always works but may not move the site's own UI.
+ *
  * Direction per channel matters, and the reported YouTube behavior proves it:
  *
  *   - rate / volume: ELEMENT → player API. The manager and the volume slider

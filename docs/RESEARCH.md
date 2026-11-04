@@ -541,10 +541,15 @@ in-flight start now lands after the navigation and activates.
 **Site volume indicators.** The popup writes `HTMLMediaElement.volume`; the
 browser fires the standard `volumechange` event. A local fixture whose site
 indicator listens only to that event follows the popup slider, proving the
-standard path needs no adapter. YouTube's own player keeps a private volume
-model and can continue showing its own percentage; there is no stable
-extension API to drive that custom UI, so the limitation is documented and
-the popup's own display remains the truthful one.
+standard path needs no adapter. YouTube's first-party player keeps a private
+volume model; it is synchronized through the player's INTERNAL methods
+(`#movie_player.getVolume/setVolume`, also `isMuted/mute/unMute` and
+`getPlaybackRate/setPlaybackRate`) — NOT the official YouTube IFrame Player
+API, undocumented and subject to change. The adapter feature-detects those
+methods and no-ops safely without them; the element write and popup readout
+remain the truthful fallback. Verified on the environment's current
+youtube.com build by `npm run youtube-check` (volume indicator + mute matrix
++ actual playback 2×–16×).
 
 **Adapters.** Site-button availability now treats hidden and `aria-hidden`
 buttons as unavailable in addition to `disabled`/`aria-disabled`. YouTube
