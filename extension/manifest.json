@@ -37,7 +37,7 @@
     },
     "mute-all": {
       "suggested_key": { "default": "Alt+Shift+M" },
-      "description": "Mute or unmute every audible tab"
+      "description": "Mute or unmute browser tab audio of every audible tab"
     }
   }
 }

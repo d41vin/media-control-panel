@@ -235,7 +235,7 @@ function makeRow(tab) {
 
   const muteBtn = el('button', 'icon-btn quiet mute');
   muteBtn.type = 'button';
-  muteBtn.title = 'Mute / unmute tab';
+  muteBtn.title = 'Mute / unmute browser tab audio';
 
   const playBtn = el('button', 'icon-btn play');
   playBtn.type = 'button';
@@ -338,7 +338,7 @@ function makeRow(tab) {
   menuBtn.setAttribute('aria-expanded', 'false');
   menuBtn.replaceChildren(icon('menu'));
 
-  controls.append(pipBtn, speedCluster, volBtn, boostBtn, menuBtn);
+  controls.append(speedCluster, pipBtn, volBtn, boostBtn, menuBtn);
 
   // popovers: inline collapsible sections under the controls row
   const volPop = el('div', 'popover vol-pop');
@@ -1149,7 +1149,7 @@ function refreshChrome() {
   pauseAllBtn.disabled = !anyPlaying;
   const allMuted = n > 0 && [...rows.values()].every((r) => r.tab.mutedInfo?.muted);
   muteAllBtn.disabled = n === 0;
-  muteAllBtn.textContent = allMuted ? 'Unmute all' : 'Mute all';
+  muteAllBtn.textContent = allMuted ? 'Unmute tabs' : 'Mute tabs';
 }
 
 /** Site-button selectors for the tab's adapter, or null when it has none. */
@@ -1742,11 +1742,11 @@ async function adoptTab(tab) {
 
 function buildHints() {
   if (/Mac/.test(navigator.userAgent)) {
-    hintsEl.textContent = '⌥⇧P Pause all · ⌥⇧M Mute all';
+    hintsEl.textContent = '⌥⇧P Pause all · ⌥⇧M Mute tabs';
     return;
   }
   hintsEl.replaceChildren(
-    ...['Alt+Shift+P', ' pause all · ', 'Alt+Shift+M', ' mute all'].map((t, i) =>
+    ...['Alt+Shift+P', ' pause all · ', 'Alt+Shift+M', ' mute tabs'].map((t, i) =>
       i % 2 === 0 ? Object.assign(document.createElement('kbd'), { textContent: t }) : document.createTextNode(t),
     ),
   );
