@@ -1,4 +1,4 @@
-// Real-site verification on youtube.com, driven through CDP in a headed Edge
+// Real-site verification on youtube.com, driven through CDP in a headed Chrome
 // window with the unpacked extension loaded.
 //
 //   node scripts/youtube-check.mjs
@@ -22,6 +22,7 @@
 
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { browserName, browserPath as browserPathOf, browserVersion, ensureExtension, extensionArgs } from './browser.mjs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -138,8 +139,9 @@ async function main() {
   let browserProcess = null;
   let ws = null;
   try {
-    const browserPath = ['C:/Program Files/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find((p) => existsSync(p));
-    if (!browserPath) throw new Error('no Edge installation found');
+    const browserPath = browserPathOf();
+    const browserInfo = `${browserName()} ${browserVersion(browserPath) ?? '(version unknown)'}`;
+    console.log(`browser: ${browserInfo} — ${browserPath}`);
     // real headed window: visibility/focus behavior (the reported unmute-on-
     // activation) only exists with actual tabs in a real window
     browserProcess = spawn(
@@ -149,12 +151,10 @@ async function main() {
         `--user-data-dir=${profile}`,
         '--no-first-run',
         '--no-default-browser-check',
-        '--disable-features=DisableLoadExtensionCommandLineSwitch',
+        ...extensionArgs(EXT),
         '--autoplay-policy=no-user-gesture-required',
         '--mute-audio', // no audible noise; element/tab mute states still real
         '--window-size=1100,800',
-        `--disable-extensions-except=${EXT}`,
-        `--load-extension=${EXT}`,
         'about:blank',
       ],
       { stdio: 'ignore' },
@@ -170,6 +170,7 @@ async function main() {
       ws.addEventListener('error', rej);
     });
     const cdp = new Cdp(ws);
+    await ensureExtension((method, params) => cdp.send(method, params), EXT);
 
     const sw = await waitFor(async () => {
       const { targetInfos } = await cdp.send('Target.getTargets');
@@ -223,7 +224,7 @@ async function main() {
     if (!baseline?.api) throw new Error('movie_player API not found — the internal player surface changed');
 
     // --- the popup as an extension page -------------------------------------
-    // This Edge runs with --mute-audio, so the tab never reports audible;
+    // This browser runs with --mute-audio, so the tab never reports audible;
     // seed the recent list (the extension's own detection path for paused/
     // silent media) so the popup lists the YouTube tab, as it would on a
     // normal audible session.

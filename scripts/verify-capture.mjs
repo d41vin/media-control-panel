@@ -22,6 +22,7 @@
 
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { browserName, browserPath as browserPathOf, browserVersion, ensureExtension, extensionArgs } from './browser.mjs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -111,12 +112,9 @@ async function main() {
       return r.ok;
     }, 8000);
 
-    const browserPath = [
-      'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
-      'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-    ].find((p) => existsSync(p));
-    if (!browserPath) throw new Error('no Edge installation found');
-    console.log('launching a real (headed) Edge window — it closes again in under a minute');
+    const browserPath = browserPathOf();
+    console.log(`browser: ${browserName()} ${browserVersion(browserPath) ?? '(version unknown)'} — ${browserPath}`);
+    console.log('launching a real (headed) browser window — it closes again in under a minute');
     browserProcess = spawn(
       browserPath,
       [
@@ -125,9 +123,8 @@ async function main() {
         '--no-first-run',
         '--no-default-browser-check',
         '--window-size=900,700',
+        ...extensionArgs(EXT),
         '--autoplay-policy=no-user-gesture-required',
-        `--disable-extensions-except=${EXT}`,
-        `--load-extension=${EXT}`,
         'about:blank',
       ],
       { stdio: 'ignore' },

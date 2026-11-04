@@ -1,28 +1,34 @@
-// Regenerates the README screenshots from the ACTUAL extension popup: loads
-// the unpacked extension in Edge (headless), plays real content (youtube.com
-// when the network allows it, plus a local sample tab), opens popup.html as an
-// extension page — the same chrome.* context the action popup gets — and
-// captures the popup surface in its real states:
+// Regenerates the README screenshots from the REAL extension action popup.
 //
-//   docs/screenshots/popup-card.png      one media card
-//   docs/screenshots/popup-multi.png     two media cards
+//   node scripts/screenshot.mjs     (also: npm run shots)
+//
+// A headed Google Chrome window opens briefly (Edge via MCP_BROWSER=edge)
+// with the unpacked extension loaded and two real tabs playing (youtube.com
+// when the network allows it, plus a local sample). The actual toolbar
+// action popup is opened with chrome.action.openPopup() — anchored to the
+// toolbar, i.e. the real browser bubble, NOT a tab rendering of popup.html —
+// and its content is captured over CDP:
+//
+//   docs/screenshots/popup-card.png      one media card (real popup)
+//   docs/screenshots/popup-multi.png     two media cards (real popup)
 //   docs/screenshots/popup-volume.png    volume popover: Tab audio / Player audio
 //   docs/screenshots/popup-settings.png  settings panel (appearance + toggles)
 //   docs/screenshots/popup-light.png     light theme, multi-card
 //   docs/screenshots/popup-dark.png      dark theme, multi-card
 //
-//   node scripts/screenshot.mjs     (also: npm run shots)
-//
-// Captures are 2x for readability. The html backdrop is painted gray for the
-// shot only so the popup's own rounded surface is visible against a contrast;
-// the shipped CSS keeps it transparent (the real bubble shows the page
-// beneath).
+// What a CDP screenshot of the popup contains: the popup's own document, at
+// its real size, exactly what the browser renders inside the bubble. The
+// bubble's OUTER frame, shadow and rounded window decorations are drawn by
+// the browser's UI layer and are not part of a page capture — the shots are
+// the internal popup surface only, as it actually appears. No fake backdrop
+// is painted; the document's own theme background fills the frame.
 
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { browserName, browserPath as browserPathOf, browserVersion, ensureExtension, extensionArgs } from './browser.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // the repo keeps the extension in extension/; the packaged archive has it
@@ -99,25 +105,20 @@ async function main() {
       return r.ok;
     }, 8000);
 
-    const browserPath = [
-      'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
-      'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-    ].find((p) => existsSync(p));
-    if (!browserPath) throw new Error('no Edge installation found');
+    const browserPath = browserPathOf();
+    console.log(`browser: ${browserName()} ${browserVersion(browserPath) ?? '(version unknown)'} — ${browserPath}`);
+    // headed: the real action popup needs a focused window; no headless flag
     browserProcess = spawn(
       browserPath,
       [
-        '--headless=new',
         `--remote-debugging-port=${PORT}`,
         `--user-data-dir=${profile}`,
         '--no-first-run',
         '--no-default-browser-check',
-        '--disable-features=DisableLoadExtensionCommandLineSwitch',
+        ...extensionArgs(EXT),
         '--autoplay-policy=no-user-gesture-required',
         '--mute-audio', // no audible noise while capturing
-        '--window-size=520,780',
-        `--disable-extensions-except=${EXT}`,
-        `--load-extension=${EXT}`,
+        '--window-size=760,900',
         'about:blank',
       ],
       { stdio: 'ignore' },
@@ -134,6 +135,7 @@ async function main() {
       ws.addEventListener('error', rej);
     });
     const cdp = new Cdp(ws);
+    await ensureExtension((method, params) => cdp.send(method, params), EXT);
 
     console.log('browser up; waiting for the service worker');
     const sw = await waitFor(async () => {
@@ -180,30 +182,28 @@ async function main() {
     const seedRecent = (ids) =>
       evalIn(cdp, swSession, `chrome.storage.session.set({ recent: ${JSON.stringify(ids)} })`, true);
 
-    const openPopup = async () => {
-      const p = await cdp.send('Target.createTarget', { url: `chrome-extension://${extId}/popup.html` });
-      const s = (await cdp.send('Target.attachToTarget', { targetId: p.targetId, flatten: true })).sessionId;
-      await waitFor(() => evalIn(cdp, s, `document.querySelectorAll('.row').length >= 1`), 20000);
+    /** Open the REAL toolbar action popup; returns its target + session. */
+    const openActionPopup = async (recentIds) => {
+      await seedRecent(recentIds);
+      const winId = await evalIn(cdp, swSession, `chrome.windows.getCurrent().then((w) => w.id)`, true);
+      await evalIn(cdp, swSession, `chrome.windows.update(${winId}, { focused: true }).catch(() => {})`, true);
+      await sleep(400);
+      await evalIn(cdp, swSession, `chrome.action.openPopup()`, true);
+      const target = await waitFor(async () => {
+        const { targetInfos } = await cdp.send('Target.getTargets');
+        return targetInfos.find((t) => t.type === 'page' && t.url.endsWith('/popup.html'));
+      }, 15000);
+      const session = (await cdp.send('Target.attachToTarget', { targetId: target.targetId, flatten: true })).sessionId;
+      await waitFor(() => evalIn(cdp, session, `document.querySelectorAll('.row').length >= 1`), 20000);
       await sleep(700); // probes settle (artwork/titles)
-      return s;
+      return { target, session };
     };
 
-    // paint the backdrop gray + set up the clip for the CURRENT body size
-    // Frame the shot by making the viewport EXACTLY the popup's size at 2x:
-    // no clip arithmetic to get wrong, and the browser paints crisp 2x text.
-    const sizeViewport = async (s) => {
-      const raw = await evalIn(
-        cdp, s,
-        `(() => { const b = document.body.getBoundingClientRect(); return { w: Math.ceil(b.width), h: Math.ceil(Math.min(b.height, 644)) }; })()`,
-      );
-      await cdp.send(
-        'Emulation.setDeviceMetricsOverride',
-        { width: raw.w, height: raw.h, deviceScaleFactor: 2, mobile: false },
-        s,
-      );
-      await sleep(250);
-      return raw;
+    const closeActionPopup = async (target) => {
+      await cdp.send('Target.closeTarget', { targetId: target.targetId }).catch(() => {});
+      await sleep(500);
     };
+
     const artSettled = (s) =>
       evalIn(
         cdp, s,
@@ -213,77 +213,77 @@ async function main() {
            return img.complete && img.naturalWidth > 0;
          }))()`,
       ).catch(() => true);
+
+    // The capture is the popup document itself at its real size — the bubble
+    // frame/shadow is browser UI and is not part of a page capture.
     const shot = async (s, name) => {
       await waitFor(() => artSettled(s), 8000).catch(() => {});
-      await sleep(250); // let the fallback paints settle
-      await evalIn(cdp, s, `document.documentElement.style.background = '#707070'`);
-      await sizeViewport(s);
+      await sleep(350);
       const img = await cdp.send('Page.captureScreenshot', { format: 'png' }, s);
       const out = join(OUT, name);
       writeFileSync(out, Buffer.from(img.data, 'base64'));
       console.log(`wrote ${out}`);
     };
 
-    // --- 1) one media card ---------------------------------------------------
-    await seedRecent(ytPlaying ? [ytTabId] : [localTabId]);
-    let popupTarget = await cdp.send('Target.createTarget', { url: `chrome-extension://${extId}/popup.html` });
-    let popupSession = (await cdp.send('Target.attachToTarget', { targetId: popupTarget.targetId, flatten: true })).sessionId;
-    await waitFor(() => evalIn(cdp, popupSession, `document.querySelectorAll('.row').length >= 1`), 20000);
-    await sleep(700);
-    // explicit light theme so the shot is deterministic
-    await evalIn(cdp, popupSession, `document.getElementById('settings-toggle').click()`);
-    await evalIn(cdp, popupSession, `document.querySelector('[data-theme-value="light"]').click()`);
+    // --- 1) real popup with one media card -----------------------------------
+    let popup = await openActionPopup(ytPlaying ? [ytTabId] : [localTabId]);
+    const geom = await evalIn(
+      cdp, popup.session,
+      `({ w: innerWidth, h: innerHeight,
+         htmlBg: getComputedStyle(document.documentElement).backgroundColor,
+         bodyBg: getComputedStyle(document.body).backgroundColor,
+         bodyRadius: getComputedStyle(document.body).borderRadius })`,
+    );
+    console.log('real popup geometry:', JSON.stringify(geom));
+    // explicit light theme so the shot is deterministic (real selector)
+    await evalIn(cdp, popup.session, `document.getElementById('settings-toggle').click()`);
+    await evalIn(cdp, popup.session, `document.querySelector('[data-theme-value="light"]').click()`);
     await sleep(300);
-    await evalIn(cdp, popupSession, `document.getElementById('settings-toggle').click()`);
+    await evalIn(cdp, popup.session, `document.getElementById('settings-toggle').click()`);
     await sleep(400);
-    await shot(popupSession, 'popup-card.png');
-    await cdp.send('Target.closeTarget', { targetId: popupTarget.targetId }).catch(() => {});
+    await shot(popup.session, 'popup-card.png');
+    await closeActionPopup(popup.target);
 
-    // --- 2..6) two cards, volume popover, settings, light/dark --------------
-    await seedRecent(ytPlaying ? [ytTabId, localTabId] : [localTabId]);
-    popupTarget = await cdp.send('Target.createTarget', { url: `chrome-extension://${extId}/popup.html` });
-    popupSession = (await cdp.send('Target.attachToTarget', { targetId: popupTarget.targetId, flatten: true })).sessionId;
-    await waitFor(() => evalIn(cdp, popupSession, `document.querySelectorAll('.row').length >= 1`), 20000);
-    await sleep(700);
-    await waitFor(() => evalIn(cdp, popupSession, `document.querySelectorAll('.row').length >= ${ytPlaying ? 2 : 1}`), 15000);
-    await evalIn(cdp, popupSession, `document.getElementById('settings-toggle').click()`).catch(() => {});
-    await evalIn(cdp, popupSession, `document.querySelector('[data-theme-value="light"]').click()`).catch(() => {});
+    // --- 2..6) real popup with two cards, volume, settings, light/dark -------
+    popup = await openActionPopup(ytPlaying ? [ytTabId, localTabId] : [localTabId]);
+    await waitFor(() => evalIn(cdp, popup.session, `document.querySelectorAll('.row').length >= ${ytPlaying ? 2 : 1}`), 15000);
+    await evalIn(cdp, popup.session, `document.getElementById('settings-toggle').click()`);
+    await evalIn(cdp, popup.session, `document.querySelector('[data-theme-value="light"]').click()`);
     await sleep(300);
-    await evalIn(cdp, popupSession, `document.getElementById('settings-toggle').click()`);
+    await evalIn(cdp, popup.session, `document.getElementById('settings-toggle').click()`);
     await sleep(400);
-    await shot(popupSession, 'popup-multi.png');
+    await shot(popup.session, 'popup-multi.png');
 
-    // volume popover: the two audio truths, with the player muted to show the
-    // accent state (and the tab audio left unmuted — they are independent)
+    // volume popover: both audio truths, with the player muted to show the
+    // accent state (tab audio stays independent)
     const rowExpr = `[...document.querySelectorAll('.row')].find((r) => r.querySelector('.t-site').textContent.includes(${ytPlaying ? "'youtube'" : "'localhost'"}))`;
-    await evalIn(cdp, popupSession, `((${rowExpr}) || document.querySelector('.row')).querySelector('.vol-btn').click()`);
+    await evalIn(cdp, popup.session, `((${rowExpr}) || document.querySelector('.row')).querySelector('.vol-btn').click()`);
     await sleep(700);
-    await evalIn(cdp, popupSession, `((${rowExpr}) || document.querySelector('.row')).querySelector('.player-audio').click()`).catch(() => {});
+    await evalIn(cdp, popup.session, `((${rowExpr}) || document.querySelector('.row')).querySelector('.player-audio').click()`).catch(() => {});
     await sleep(900);
-    await shot(popupSession, 'popup-volume.png');
+    await shot(popup.session, 'popup-volume.png');
 
-    // settings panel
-    await evalIn(cdp, popupSession, `[...document.querySelectorAll('.row')].forEach((r) => r.querySelector('.vol-btn').click())`).catch(() => {});
-    await sleep(200);
-    await evalIn(cdp, popupSession, `document.querySelector('.row .vol-btn').click()`).catch(() => {});
+    // settings panel (close any open popover first)
+    await evalIn(cdp, popup.session, `[...document.querySelectorAll('.row')].forEach((r) => { if (r.querySelector('.vol-pop').classList.contains('open')) r.querySelector('.vol-btn').click(); })`).catch(() => {});
     await sleep(300);
-    await evalIn(cdp, popupSession, `document.getElementById('settings-toggle').click()`);
+    await evalIn(cdp, popup.session, `document.getElementById('settings-toggle').click()`);
     await sleep(500);
-    await shot(popupSession, 'popup-settings.png');
+    await shot(popup.session, 'popup-settings.png');
 
     // light + dark multi-card (settings closed, theme via the real selector)
-    await evalIn(cdp, popupSession, `document.getElementById('settings-toggle').click()`);
-    await evalIn(cdp, popupSession, `document.querySelector('[data-theme-value="light"]').click()`);
+    await evalIn(cdp, popup.session, `document.getElementById('settings-toggle').click()`);
+    await evalIn(cdp, popup.session, `document.querySelector('[data-theme-value="light"]').click()`);
     await sleep(500);
-    await shot(popupSession, 'popup-light.png');
-    await evalIn(cdp, popupSession, `document.getElementById('settings-toggle').click()`);
-    await evalIn(cdp, popupSession, `document.querySelector('[data-theme-value="dark"]').click()`);
+    await shot(popup.session, 'popup-light.png');
+    await evalIn(cdp, popup.session, `document.getElementById('settings-toggle').click()`);
+    await evalIn(cdp, popup.session, `document.querySelector('[data-theme-value="dark"]').click()`);
     await sleep(300);
-    await evalIn(cdp, popupSession, `document.getElementById('settings-toggle').click()`);
+    await evalIn(cdp, popup.session, `document.getElementById('settings-toggle').click()`);
     await sleep(500);
-    await shot(popupSession, 'popup-dark.png');
+    await shot(popup.session, 'popup-dark.png');
+    await closeActionPopup(popup.target);
 
-    console.log('screenshots written to docs/screenshots/');
+    console.log('screenshots written to docs/screenshots/ (real action popup)');
   } catch (err) {
     console.error('Screenshot failure:', err.message);
     process.exitCode = 1;

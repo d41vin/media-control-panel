@@ -13,6 +13,7 @@
 
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { browserName, browserPath as browserPathOf, browserVersion, ensureExtension, extensionArgs } from './browser.mjs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -106,11 +107,8 @@ async function main() {
       return r.ok;
     }, 8000);
 
-    const browserPath = [
-      'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
-      'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-    ].find((p) => existsSync(p));
-    if (!browserPath) throw new Error('no Edge installation found for the harness runner');
+    const browserPath = browserPathOf();
+    console.log(`browser: ${browserName()} ${browserVersion(browserPath) ?? '(version unknown)'} — ${browserPath}`);
     browserProcess = spawn(
       browserPath,
       [

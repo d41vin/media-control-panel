@@ -1,4 +1,4 @@
-// Real-browser end-to-end test: launches actual Edge (headless) with the
+// Real-browser end-to-end test: launches actual Google Chrome (headless) with the
 // unpacked extension loaded, opens the media fixture and the popup as a page
 // (chrome-extension://<id>/popup.html behaves like the popup with full
 // chrome.* context), then drives the whole feature matrix over CDP:
@@ -13,6 +13,7 @@
 
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { browserName, browserPath as browserPathOf, browserVersion, ensureExtension, extensionArgs } from './browser.mjs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -136,10 +137,12 @@ async function main() {
       return r.ok;
     }, 8000);
 
-    // Edge (Chromium) still honors --load-extension; branded Chrome 137+
-    // does not, and downloading a test browser into the repo is off the table
-    const browserPath = ['C:/Program Files/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find((p) => existsSync(p));
-    if (!browserPath) throw new Error('no Edge installation found for the E2E rig');
+    // Chrome is the primary target; Edge stays selectable via MCP_BROWSER.
+    // Branded Chrome 137+ ignores --load-extension, so Chrome loads the
+    // unpacked extension through the CDP Extensions domain after connect.
+    const browserPath = browserPathOf();
+    const browserInfo = `${browserName()} ${browserVersion(browserPath) ?? '(version unknown)'}`;
+    console.log(`browser: ${browserInfo} — ${browserPath}`);
     browserProcess = spawn(
       browserPath,
       [
@@ -148,14 +151,12 @@ async function main() {
         `--user-data-dir=${profile}`,
         '--no-first-run',
         '--no-default-browser-check',
-        '--disable-features=DisableLoadExtensionCommandLineSwitch',
+        ...extensionArgs(EXT),
         '--autoplay-policy=no-user-gesture-required',
         // new headless renders audio to real speakers — mute the browser,
         // not the elements/tabs (assertions read those states)
         '--mute-audio',
         '--window-size=1000,900',
-        `--disable-extensions-except=${EXT}`,
-        `--load-extension=${EXT}`,
         'about:blank',
       ],
       { stdio: 'ignore' },
@@ -186,6 +187,8 @@ async function main() {
       } catch {}
     });
     const cdp = new Cdp(ws);
+    // Chrome: load the unpacked extension now (Edge: already loaded by flags)
+    await ensureExtension((method, params) => cdp.send(method, params), EXT);
 
     // the extension's service worker target proves the manifest parsed and
     // the worker started (bad manifests never get here)
@@ -715,9 +718,9 @@ async function main() {
     await evalIn(cdp, popupSession, `document.getElementById('mute-all').click()`);
     await waitFor(() => evalIn(cdp, swSession, `chrome.tabs.query({muted:true}).then(t => t.length >= 1)`));
     const muteAllLabel = await evalIn(cdp, popupSession, `document.getElementById('mute-all').textContent`);
-    muteAllLabel === 'Unmute all'
-      ? ok('mute-all works and flips to Unmute all')
-      : bad('mute-all works and flips to Unmute all', `label="${muteAllLabel}"`);
+    muteAllLabel === 'Unmute tabs'
+      ? ok('mute-tabs works and flips to Unmute tabs')
+      : bad('mute-tabs works and flips to Unmute tabs', `label="${muteAllLabel}"`);
     await evalIn(cdp, popupSession, `document.getElementById('mute-all').click()`);
     await waitFor(() => evalIn(cdp, swSession, `chrome.tabs.query({muted:true}).then(t => t.length === 0)`));
     ok('unmute-all restores tabs');
