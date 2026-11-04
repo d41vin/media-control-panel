@@ -1122,6 +1122,33 @@ async function main() {
       : bad('reopened popup reads current volume (55%) and player mute — no stale snapshot, no jump-back', JSON.stringify(freshState));
     await cdp.send('Target.closeTarget', { targetId: popupR.targetId });
 
+    // Clean policy state first: an earlier section left a page override on the
+    // media tab, which keeps enforcement active — and an active policy's page
+    // manager correctly re-stamps the ps fixture's direct element writes back
+    // to the inherited global rate. The adapter sync is what is under test
+    // here, so clear the override and let the manager disconnect everywhere.
+    await evalIn(
+      cdp,
+      popupSession2,
+      `(() => {
+         const r = [...document.querySelectorAll('.row')].find((x) => {
+           const b = x.querySelector('.rate-reset');
+           return b && !b.hidden;
+         });
+         if (r) r.querySelector('.rate-reset').click();
+       })()`,
+    );
+    await waitFor(
+      () =>
+        evalIn(
+          cdp,
+          swSession,
+          `chrome.storage.session.get('speedOverrides').then((s) => Object.keys(s.speedOverrides ?? {}).length === 0)`,
+          true,
+        ),
+      15000,
+    );
+
     // --- site adapter: private-player sync (the YouTube first-party case) ----
     // player-sync.html stands in for a site whose player UI is driven by a
     // PRIVATE player state with an API surface (#movie_player) — element

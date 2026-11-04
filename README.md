@@ -157,7 +157,7 @@ command matrix plus the speed-policy and boost state machines.
 
 - `npm test` — static checks (module syntax, manifest sanity, icons, references, and a guard
   that injected functions stay serialization-safe).
-- `npm run harness` — runs both mock pages in headless Edge: 78 background assertions
+- `npm run harness` — runs both mock pages in headless Edge: 79 background assertions
   (commands, badge, speed-policy coordination including policy revisions, documentId
   scoping for SPA/reload/hash transitions and frame-aware report provenance, silent-
   tab coverage, tabs created after the global speed is set, player-initialization
@@ -167,16 +167,20 @@ command matrix plus the speed-policy and boost state machines.
   updates, delayed-operation cancellation at every startup stage, the full-startup
   deadline, stale request ids, restarts, failure cleanup, navigation persistence and
   tab-close cleanup) plus a popup pass that checks all three appearance options,
-  the 5 %/10 % slider steps, and a 3.3 s quick-mute stability window.
+  the 5 %/10 % slider steps, a 3.3 s quick-mute stability window, the volume popover's two
+  independent audio truths, and the player-API sync wiring.
 - `npm run e2e` — launches a real Chromium browser (Edge via CDP — branded Chrome 137+ ignores
   `--load-extension`) with the unpacked extension loaded, opens the popup as an extension page,
-  and drives 104 end-to-end assertions: detection, titles, play/pause/resume, exclusive playback,
+  and drives 119 end-to-end assertions: detection, titles, play/pause/resume, exclusive playback,
   seek, volume, the global and per-page speed policy, mute (browser state and icon sampled over
   3 s, with an unmute-event check), global actions, badge, pin, boost plumbing and gating,
   override persistence, adapters (host selection plus hidden/aria-disabled/disabled/absent site
   buttons), keyboard navigation and 5 % slider steps, settings, appearance (System/Light/Dark
-  rendering, persistence and frame-gap geometry), a standard-`volumechange` site indicator
-  fixture — plus a 16-step deterministic speed-regression matrix (test/speed-suite.html,
+  rendering, persistence and frame-gap geometry), two-way synchronization with site players
+  (native volume/mute/speed changes reaching the popup readouts, extension changes reaching a
+  listening site's UI, tab-audio vs player-audio independence, popup-reopen freshness, a
+  private-player stub whose UI only follows its MAIN-world API — clamping, idempotence and
+  feature-detection included) — plus a 16-step deterministic speed-regression matrix (test/speed-suite.html,
   generated 180 s tones, no network): global application and `defaultPlaybackRate` stamping,
   a tab opened AFTER the global speed is chosen, a player's 1.00× initialization write
   re-stamped instead of adopted, native-ratechange adoption, SPA video changes keeping the

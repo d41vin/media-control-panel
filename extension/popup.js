@@ -361,9 +361,11 @@ function makeRow(tab) {
   const volStates = el('div', 'vol-states');
   const tabAudioBtn = el('button', 'vol-state tab-audio');
   tabAudioBtn.type = 'button';
+  tabAudioBtn.title = "Mutes this tab's audio in the browser (the tab-strip speaker)";
   tabAudioBtn.append(el('span', 'vs-label', 'Tab audio'), el('span', 'vs-value', '—'));
   const playerAudioBtn = el('button', 'vol-state player-audio');
   playerAudioBtn.type = 'button';
+  playerAudioBtn.title = "Mutes the page's own player (the media element), independent of the tab";
   playerAudioBtn.append(el('span', 'vs-label', 'Player audio'), el('span', 'vs-value', '—'));
   volStates.append(tabAudioBtn, playerAudioBtn);
   volPop.append(volPopHead, vol, volStates);
@@ -635,6 +637,14 @@ function togglePopover(rec, name) {
       rec.nodes.vol.value = String(element.volume);
       setFill(rec.nodes.vol);
       rec.nodes.volReadout.textContent = `${Math.round(element.volume * 100)}%`;
+    } else {
+      // a row whose initial probe found no media (tab still loading,
+      // discarded, transient failure) gets one more chance here instead of
+      // showing the global fallback until the popup is reopened
+      void probeTab(rec).then((probe) => {
+        if (rec.probe || rows.get(rec.tab.id) !== rec) return; // a newer read won
+        applyProbe(rec, probe);
+      });
     }
     // the slider must show the CURRENT truth, never the snapshot from when
     // the popup (or the probe) was new: one fresh ping lands the page's live
