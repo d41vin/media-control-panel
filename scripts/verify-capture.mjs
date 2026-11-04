@@ -101,6 +101,7 @@ async function main() {
   const server = spawn(process.execPath, [join(ROOT, 'serve.mjs')], { stdio: 'ignore' });
   const profile = mkdtempSync(join(tmpdir(), 'mcp-verify-'));
   let browserProcess = null;
+  let ws = null;
 
   try {
     await waitFor(async () => {
@@ -135,7 +136,7 @@ async function main() {
       const j = await r.json();
       return j.webSocketDebuggerUrl;
     }, 30000);
-    const ws = new WebSocket(wsUrl);
+    ws = new WebSocket(wsUrl);
     await new Promise((res, rej) => {
       ws.addEventListener('open', res);
       ws.addEventListener('error', rej);
@@ -384,12 +385,18 @@ async function main() {
     process.exitCode = 1;
   } finally {
     try {
+      ws?.close(); // otherwise node's event loop keeps the process alive forever
+    } catch {}
+    try {
       browserProcess?.kill();
     } catch {}
     try {
       rmSync(profile, { recursive: true, force: true });
     } catch {}
     server.kill();
+    // belt: nothing may keep this process alive past the run — a lingering
+    // handle would hold the debug port and poison the next run
+    process.exit(process.exitCode ?? 0);
   }
 }
 
