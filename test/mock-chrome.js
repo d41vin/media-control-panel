@@ -88,13 +88,25 @@ function fakeTab(def) {
         },
         querySelector(sel) {
           if (sel in tabRef._siteButtons) {
+            // a stand-in for a real, visible, enabled site button — probed
+            // by pageProbe's availability check (hidden/disabled/aria all
+            // read), so it must answer like a live element
             return {
+              disabled: false,
+              hidden: false,
+              getAttribute: () => null,
+              getClientRects: () => [{}],
               click() {
                 const key = tabRef._siteButtons[sel];
                 tabRef._clicks[key] = (tabRef._clicks[key] ?? 0) + 1;
               },
             };
           }
+          return null;
+        },
+        // player-API sync functions probe the page for a private player; the
+        // fake pages have none, so the probe must resolve cleanly to null
+        getElementById() {
           return null;
         },
         get pictureInPictureElement() {
@@ -290,8 +302,13 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
     },
 
     scripting: {
-      async executeScript({ target, func, args }) {
-        scriptingCalls.push({ target: { ...target }, func: func?.name ?? 'anonymous', args });
+      async executeScript({ target, func, args, world }) {
+        scriptingCalls.push({
+          target: { ...target },
+          func: func?.name ?? 'anonymous',
+          args,
+          world: world ?? 'ISOLATED',
+        });
         // the real API has no singular `frameId` on the target — Chrome would
         // silently ignore it; the mock rejects so the mistake can't return
         if ('frameId' in target) {

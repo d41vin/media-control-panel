@@ -22,6 +22,7 @@ import {
   pageSeekTo,
   pageSeekBy,
   pageSetVolume,
+  pageSetMuted,
   pagePiP,
 } from './lib/page.js';
 import { adapterFor } from './lib/adapters.js';
@@ -353,7 +354,19 @@ function makeRow(tab) {
   // back from the page are still displayed truthfully (see syncCard).
   vol.step = '0.05';
   vol.setAttribute('aria-label', 'Volume');
-  volPop.append(volPopHead, vol);
+  // the two independent audio states, kept apart (they are NOT the same
+  // value): browser tab mute via the tabs API, and the native player mute
+  // of the underlying media element. Each row states its current truth and
+  // acts as its own toggle.
+  const volStates = el('div', 'vol-states');
+  const tabAudioBtn = el('button', 'vol-state tab-audio');
+  tabAudioBtn.type = 'button';
+  tabAudioBtn.append(el('span', 'vs-label', 'Tab audio'), el('span', 'vs-value', '—'));
+  const playerAudioBtn = el('button', 'vol-state player-audio');
+  playerAudioBtn.type = 'button';
+  playerAudioBtn.append(el('span', 'vs-label', 'Player audio'), el('span', 'vs-value', '—'));
+  volStates.append(tabAudioBtn, playerAudioBtn);
+  volPop.append(volPopHead, vol, volStates);
 
   const boostPop = el('div', 'popover boost-pop');
   const boostPopHead = el('div', 'pop-head');
@@ -414,6 +427,8 @@ function makeRow(tab) {
   rateInc.addEventListener('click', () => void stepPageSpeed(rows.get(tab.id), +SPEED_STEP));
   rateReset.addEventListener('click', () => void resetPageSpeed(rows.get(tab.id)));
   volBtn.addEventListener('click', () => togglePopover(rows.get(tab.id), 'vol'));
+  tabAudioBtn.addEventListener('click', () => void muteTab(rows.get(tab.id)));
+  playerAudioBtn.addEventListener('click', () => void togglePlayerMute(rows.get(tab.id)));
   boostBtn.addEventListener('click', () => togglePopover(rows.get(tab.id), 'boost'));
   menuBtn.addEventListener('click', () => togglePopover(rows.get(tab.id), 'menu'));
   pinBtn.addEventListener('click', () => {
@@ -467,6 +482,9 @@ function makeRow(tab) {
       volPop,
       vol,
       volReadout,
+      volStates,
+      tabAudioBtn,
+      playerAudioBtn,
       boostBtn,
       boostPop,
       boost,
@@ -537,10 +555,21 @@ function wireCard(rec) {
     if (rec.volTimer === undefined) {
       rec.volTimer = setTimeout(() => {
         rec.volTimer = undefined;
-        if (rec.pendingVolume !== null) {
-          void exec(rec, pageSetVolume, { volume: rec.pendingVolume });
-          rec.pendingVolume = null;
-        }
+        if (rec.pendingVolume === null) return;
+        // capture and clear synchronously: a value chosen while the write is
+        // in flight must schedule its own commit, never be dropped by this
+        // one's completion
+        const wanted = rec.pendingVolume;
+        rec.pendingVolume = null;
+        void (async () => {
+          await exec(rec, pageSetVolume, { volume: wanted });
+          // hosts with a private player API need the API channel too —
+          // element writes alone don't move their UI
+          await syncSitePlayer(rec);
+          // the site may have rounded or clamped the value; the ping is
+          // what makes the readout the element's actual truth
+          void pingNow(rec);
+        })();
       }, 80);
     }
   });
@@ -607,17 +636,26 @@ function togglePopover(rec, name) {
       setFill(rec.nodes.vol);
       rec.nodes.volReadout.textContent = `${Math.round(element.volume * 100)}%`;
     }
+    // the slider must show the CURRENT truth, never the snapshot from when
+    // the popup (or the probe) was new: one fresh ping lands the page's live
+    // volume / mute / rate and re-renders through the single render path
+    void pingNow(rec);
   }
   if (next) {
     const focusTarget = { vol: 'vol', boost: 'boost', menu: 'menuBtn' }[next];
     rec.nodes[focusTarget]?.focus?.();
   }
+  // the volume popover watches the page even when media is paused — a native
+  // mute/volume change (or our own) must keep the readout current while the
+  // user is looking at it
+  updateRow(rec);
 }
 
 function closePopover(rec) {
   if (!rec?.openPopover) return;
   rec.openPopover = null;
   syncPopover(rec);
+  updateRow(rec); // may stop the popover-driven ping loop
 }
 
 function syncPopover(rec) {
@@ -954,9 +992,12 @@ function updateRow(rec) {
 
   if (!nodes.li.parentNode) listEl.append(nodes.li);
 
-  // ping loop follows playing state; stopPing syncs once on pause
-  if (rec.playing && rec.probe && !rec.ping) startPing(rec);
-  if (rec.ping && !rec.playing) stopPing(rec);
+  // ping loop follows playing state; the volume popover keeps it alive even
+  // on paused media while it is open (its readouts must stay current);
+  // stopPing syncs once when the loop stops
+  const wantPing = rec.playing || rec.openPopover === 'vol';
+  if (wantPing && rec.probe && !rec.ping) startPing(rec);
+  if (rec.ping && !wantPing) stopPing(rec);
   syncCard(rec);
 }
 
@@ -1012,6 +1053,27 @@ function syncCard(rec) {
   n.boostStatus.textContent = bs?.state === 'error' ? bs.error : '';
   n.boostStatus.classList.toggle('error', bs?.state === 'error');
   n.boostReset.disabled = !bs || bs.state === 'pending';
+
+  // the volume popover's two audio truths, rendered like every other
+  // readout (not user-dragged values): tab mute is the browser's, player
+  // mute is the primary element's. They are independent and can disagree.
+  const tabMuted = !!rec.tab.mutedInfo?.muted;
+  n.tabAudioBtn.querySelector('.vs-value').textContent = tabMuted ? 'Muted' : 'Unmuted';
+  n.tabAudioBtn.classList.toggle('is-muted', tabMuted);
+  n.tabAudioBtn.setAttribute('aria-label', tabMuted ? 'Unmute tab audio' : 'Mute tab audio');
+  const playerMuted = element ? !!element.muted : null;
+  n.playerAudioBtn.querySelector('.vs-value').textContent =
+    playerMuted === null ? '—' : playerMuted ? 'Muted' : 'Unmuted';
+  n.playerAudioBtn.classList.toggle('is-muted', playerMuted === true);
+  n.playerAudioBtn.disabled = playerMuted === null;
+  n.playerAudioBtn.setAttribute(
+    'aria-label',
+    playerMuted === null
+      ? 'Player audio unknown'
+      : playerMuted
+        ? 'Unmute the page player'
+        : 'Mute the page player',
+  );
 
   // Below: values the user may be holding — the render must not fight the
   // hand while a slider is dragged.
@@ -1105,6 +1167,7 @@ async function pingNow(rec) {
       p.element.currentTime = state.currentTime;
       p.element.duration = state.duration;
       p.element.volume = state.volume;
+      p.element.muted = !!state.muted;
       p.element.rate = state.rate;
     }
     if (state.siteButtons) rec.adapterState = state.siteButtons;
@@ -1369,6 +1432,46 @@ async function muteTab(rec) {
   } catch {
     // the command did not land: fall back to the browser's truth
     void reconcileTabState();
+  }
+}
+
+/**
+ * Toggle the NATIVE player mute of the primary element. Browser tab mute
+ * (chrome.tabs.update) is a different state and is never touched here — the
+ * two must be able to disagree. The write fires the standard volumechange,
+ * so a listening site follows on its own; a quick ping confirms what really
+ * landed and re-renders through the single render path.
+ */
+async function togglePlayerMute(rec) {
+  if (!rec?.probe) return;
+  const element = primaryOfProbe(rec.probe)?.element;
+  if (!element) return;
+  const target = !element.muted;
+  element.muted = target; // optimistic; the confirmation ping is the truth
+  updateRow(rec);
+  await exec(rec, pageSetMuted, { muted: target });
+  // private players need the API channel to update their own mute UI
+  await syncSitePlayer(rec);
+  setTimeout(() => void pingNow(rec), 120);
+}
+
+/**
+ * Give the site's own player API the element's fresh state after an
+ * extension-initiated write (volume, player mute). Only hosts with a known
+ * player API (adapter capability) get this MAIN-world call; it feature-
+ * detects, writes only what differs, and never throws into the popup.
+ */
+async function syncSitePlayer(rec) {
+  if (!rec?.probe || !rec.adapter?.syncPlayer) return null;
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: rec.tab.id, frameIds: [rec.probe.primaryFrameId] },
+      world: 'MAIN',
+      func: rec.adapter.syncPlayer,
+    });
+    return results[0]?.result ?? null;
+  } catch {
+    return null;
   }
 }
 

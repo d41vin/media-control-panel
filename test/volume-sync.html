@@ -8,40 +8,64 @@
     audio { display: block; margin: 8px 0 20px; }
     .site-player { border: 1px solid #ccc; border-radius: 8px; padding: 12px 16px; }
     .site-player output { font-weight: 700; font-variant-numeric: tabular-nums; }
+    .site-player button { margin-left: 12px; }
   </style>
 </head>
 <body>
   <h1>Volume Sync fixture</h1>
   <p>
-    A minimal site-like player: its own volume indicator is driven ONLY by the
-    standard media-element <code>volumechange</code> event. If the extension's
-    volume command reaches the element, the site's UI follows — no
-    site-specific adapter involved.
+    A minimal site-like player: its own indicators are driven ONLY by the
+    standard media-element events (<code>volumechange</code>,
+    <code>ratechange</code>). If the extension's command reaches the element,
+    the site's UI follows — no site-specific adapter involved.
   </p>
   <audio src="media/tone.wav" loop controls></audio>
   <div class="site-player">
-    <span>Site volume</span>
-    <output id="site-volume-indicator">100%</output>
+    <span>Site volume</span> <output id="site-volume-indicator">100%</output>
+    <span>· Site speed</span> <output id="site-rate-indicator">1.00×</output>
+    <span>· Site mute</span> <output id="site-mute-indicator">off</output>
+    <button type="button" id="site-mute-btn">Mute player</button>
   </div>
 
   <script>
     const audio = document.querySelector('audio');
-    const indicator = document.getElementById('site-volume-indicator');
-    let events = 0;
+    const volOut = document.getElementById('site-volume-indicator');
+    const rateOut = document.getElementById('site-rate-indicator');
+    const muteOut = document.getElementById('site-mute-indicator');
+    let volEvents = 0;
+    let rateEvents = 0;
 
-    // This is the whole "site integration": a normal volumechange listener.
+    // This is the whole "site integration": normal media-element listeners.
     audio.addEventListener('volumechange', () => {
-      events++;
-      indicator.textContent = Math.round(audio.volume * 100) + '%';
+      volEvents++;
+      volOut.textContent = Math.round(audio.volume * 100) + '%';
+      muteOut.textContent = audio.muted ? 'on' : 'off';
+    });
+    audio.addEventListener('ratechange', () => {
+      rateEvents++;
+      rateOut.textContent = audio.playbackRate.toFixed(2) + '×';
+    });
+
+    document.getElementById('site-mute-btn').addEventListener('click', () => {
+      audio.muted = !audio.muted;
     });
 
     window.mcpVolume = {
       audio,
-      events: () => events,
-      indicator: () => indicator.textContent,
+      events: () => volEvents,
+      rateEvents: () => rateEvents,
+      indicator: () => volOut.textContent,
+      rateIndicator: () => rateOut.textContent,
+      muteIndicator: () => muteOut.textContent,
       play: () => audio.play(),
       setSiteVolume(v) {
         audio.volume = Math.min(1, Math.max(0, v));
+      },
+      setSiteMuted(m) {
+        audio.muted = !!m;
+      },
+      setSiteRate(r) {
+        audio.playbackRate = r;
       },
     };
 

@@ -106,7 +106,7 @@ const adapterSrc = readFileSync(join(ext, 'lib', 'adapters.js'), 'utf8');
 const managerSrc = readFileSync(join(ext, 'lib', 'manager.js'), 'utf8');
 const fns = [...pageSrc.matchAll(/export (?:async )?function (page\w+)/g)].map((m) => m[1]);
 // adapter next/prev fns are injected too — they live inside the ADAPTERS literal
-const adapterFns = [...adapterSrc.matchAll(/function ((?:yt|sp|sc)(?:Next|Prev))\(/g)].map((m) => m[1]);
+const adapterFns = [...adapterSrc.matchAll(/function ((?:yt|sp|sc)(?:Next|Prev|SyncPlayer))\(/g)].map((m) => m[1]);
 if (!fns.length) fail('no exported page functions found');
 for (const fn of [...fns, ...adapterFns]) {
   const src = pageSrc.includes(`function ${fn}`) ? pageSrc : adapterSrc;

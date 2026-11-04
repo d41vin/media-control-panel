@@ -140,6 +140,7 @@ export function pagePing(site) {
     currentTime: el.currentTime || 0,
     duration: Number.isFinite(el.duration) ? el.duration : -1,
     volume: el.volume,
+    muted: !!el.muted,
     rate: el.playbackRate,
     pip: !!document.pictureInPictureElement,
     siteButtons: site
@@ -273,6 +274,26 @@ export function pageSetVolume({ volume }) {
   if (!el) return { acted: false };
   el.volume = Math.min(1, Math.max(0, volume));
   return { acted: true, volume: el.volume };
+}
+
+/**
+ * Mute / unmute the primary element — the NATIVE player mute, distinct from
+ * the browser tab mute (chrome.tabs.update). The write fires the standard
+ * volumechange event, so a site listening to it follows on its own; sites
+ * with a private player model are handled by the site adapters.
+ */
+export function pageSetMuted({ muted }) {
+  const els = (() => {
+    const found = [...document.querySelectorAll('video, audio')];
+    for (const el of document.querySelectorAll('*')) {
+      if (el.shadowRoot) found.push(...el.shadowRoot.querySelectorAll('video, audio'));
+    }
+    return found.filter((el) => el.isConnected);
+  })();
+  const el = els.find((m) => !m.paused && !m.ended) || els[0];
+  if (!el) return { acted: false };
+  el.muted = !!muted;
+  return { acted: true, muted: el.muted };
 }
 
 /** Toggle Picture-in-Picture on the primary video. */

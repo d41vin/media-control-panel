@@ -773,7 +773,7 @@ button {
 }
 
 .vol-pop.open {
-  max-height: 80px;
+  max-height: 138px;
 }
 
 .menu-pop.open {
@@ -799,6 +799,61 @@ button {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--muted);
+}
+
+/* volume popover: the two independent audio truths as labelled state rows —
+   each row is its own toggle and states the current truth */
+.vol-states {
+  display: grid;
+  gap: 1px;
+  margin-top: 6px;
+}
+
+.vol-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vol-state:hover {
+  background: var(--hover);
+}
+
+.vol-state:disabled {
+  cursor: default;
+}
+
+.vol-state:disabled:hover {
+  background: none;
+}
+
+.vs-label {
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.vs-value {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+/* muted is a live restriction the user chose — the one accent use here */
+.vs-value.is-muted,
+.vol-state.is-muted .vs-value {
+  color: var(--accent);
 }
 
 .boost-actions {

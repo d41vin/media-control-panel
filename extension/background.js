@@ -20,6 +20,7 @@
 // exists. Neither runs at factory defaults.
 
 import { pagePause, pageProbe, pageToggle } from './lib/page.js';
+import { adapterFor } from './lib/adapters.js';
 import { installSpeedManager } from './lib/manager.js';
 import { loadSettings } from './lib/settings.js';
 import {
@@ -343,6 +344,24 @@ async function rawSyncSpeedTab(tabId, pageUrl, adoptForeign = true) {
   noteManaged(tabId);
   // frames that already had a manager learn the new expectation by message
   await sendToTab(tabId, { type: 'mcp-speed-apply', rate, rev: revOf(tabId) });
+  // hosts with a known private player API (YouTube's first-party player) get
+  // one MAIN-world sync so their own UI follows the enforced rate: element
+  // truth → player API → site UI. Feature-detected and compare-only, so a
+  // settled player sees zero writes; if the player clamps (its rate menu),
+  // the element holds the clamped value and the ratechange report adopts the
+  // actual rate (R5) — the display follows reality, not the request.
+  const adapter = adapterFor(url);
+  if (adapter?.syncPlayer) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        world: 'MAIN',
+        func: adapter.syncPlayer,
+      });
+    } catch {
+      // uninjectable/discarded tab: element-level enforcement already ran
+    }
+  }
 }
 
 /**

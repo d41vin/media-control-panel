@@ -31,8 +31,10 @@ cleared on navigation or browser exit), and the active boost state
   SoundCloud — always in place, disabled where the site has no control, and
   mirroring the site's own disabled state where it exposes one), ±10 s,
   Picture-in-Picture (video only), tab mute, a volume popover (0–100 % in
-  5 % steps, element volume), a per-page speed stepper, a tab boost chip, and
-  an overflow menu (pin target, switch to tab, close tab).
+  5 % steps, element volume, plus two labelled state rows that keep the
+  browser's tab mute and the page player's own mute apart — each its own
+  toggle), a per-page speed stepper, a tab boost chip, and an overflow menu
+  (pin target, switch to tab, close tab).
 - **Global speed** — a speed bar under the header: 0.25×–4.00× in 0.25× steps,
   reset to 1.00×, persisted in `chrome.storage.local`. It is the default rate
   for media across tabs — including media that starts later, new pages, and
@@ -67,6 +69,25 @@ cleared on navigation or browser exit), and the active boost state
   while the override itself stays scoped to the tab's top-level document.
   Website-exact rates are preserved (1.10× stays 1.10×, never snapped to the
   0.25× grid).
+- **Two audio truths** — the browser's tab mute (`tab.mutedInfo`, what the
+  card speaker and Mute all control) and the page player's own mute (the
+  media element's `muted`) are independent states shown separately in the
+  volume popover ("Tab audio" / "Player audio", each row its own toggle).
+  A native player mute or volume change reaches the popup through the
+  standard `volumechange` observation (open cards track it; the volume
+  popover keeps tracking even for paused media while it is open, and fires a
+  fresh read when opened — the slider always shows the element's current
+  value, never a stale snapshot).
+- **Private-player synchronization** — players that keep their own UI state
+  ignore element writes in their interface. Where a documented player API
+  exists, an isolated adapter capability carries the element's actual state
+  into that API: on YouTube the first-party player's speed, volume and mute
+  UI follow extension changes (and a player that clamps a value — its rate
+  menu tops out at 2.00× — lands the clamped truth in the element, which the
+  popup then displays). The sync is host-gated, feature-detected,
+  compare-only, and runs in the page's MAIN world; a settled player sees
+  zero writes. Spotify and SoundCloud expose no reliable public player API,
+  so their cards stay truthful through element reads with no UI sync.
 - **Tab volume boost** — amplification from 100 % (unity) to 600 % in 10 %
   steps for **the tab you are viewing**, built on `chrome.tabCapture` + an
   offscreen document with a Web Audio `GainNode` and a soft limiter. The
@@ -237,10 +258,11 @@ extension/
   manifest.json    MV3 — scripting+storage+tabCapture+offscreen, <all_urls>, 3 commands
   popup.html/css/js  the whole UI; exists only while open
   background.js    badge + keyboard commands + speed policy authority + boost routing
-  lib/page.js      injected functions (probe/ping/toggle/pause/seek/volume/PiP)
+  lib/page.js      injected functions (probe/ping/toggle/pause/seek/volume/mute/PiP)
   lib/manager.js   injected page-level speed manager (event-driven, self-removing)
   lib/speed.js     shared speed model: range/stepping/format + storage helpers
-  lib/adapters.js  per-site next/prev track (YouTube, Spotify, SoundCloud)
+  lib/adapters.js  per-site capabilities: next/prev track (YouTube, Spotify, SoundCloud)
+                   + YouTube private-player sync (MAIN world, host-gated, feature-detected)
   lib/settings.js  settings model shared by popup and background (chrome.storage.local)
   offscreen.html/js  audio boost pipeline: capture -> gain -> limiter -> output
 scripts/           icon generator, static checks (npm test), harness runner, E2E rig,
@@ -270,6 +292,10 @@ is built the way it is.
   exposed to extensions).
 - Next/previous track only exists on sites with an adapter (YouTube, Spotify, SoundCloud); other
   sites expose no next/prev control an extension could drive.
+- Private-player UI sync exists only where a documented player API exists (YouTube). Spotify and
+  SoundCloud's web players keep their UI driven by private internals with no public API — on
+  those sites the popup readout and element state stay truthful while the site's own indicator
+  keeps showing its own model.
 - `chrome://` pages can be listed and muted but not play/paused, speed-managed, or boosted —
   they are not injectable and cannot be captured.
 - The speed manager enforces the policy blindly on **playing** media; a paused element takes

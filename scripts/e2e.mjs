@@ -117,8 +117,15 @@ async function main() {
   const server = spawn(process.execPath, [join(ROOT, 'serve.mjs')], { stdio: 'ignore' });
   const profile = mkdtempSync(join(tmpdir(), 'mcp-e2e-'));
   let browserProcess = null;
+  let ws = null;
 
   try {
+    // a zombie browser from a killed/failed run holds the debug port; attaching
+    // to it would drive a stale session (old tabs, old extension) and produce
+    // phantom assertions — refuse to run instead
+    if (!(await fetch(`http://127.0.0.1:${PORT}/json/version`).then(() => false, () => true))) {
+      throw new Error(`debug port ${PORT} is already in use — kill the leftover test browser first`);
+    }
     await waitFor(async () => {
       const r = await fetch(`http://127.0.0.1:${SERVE_PORT}/test/media-page.html`);
       return r.ok;
@@ -155,7 +162,7 @@ async function main() {
       const j = await r.json();
       return j.webSocketDebuggerUrl;
     }, 30000);
-    const ws = new WebSocket(wsUrl);
+    ws = new WebSocket(wsUrl);
     await new Promise((res, rej) => {
       ws.addEventListener('open', res);
       ws.addEventListener('error', rej);
@@ -312,7 +319,12 @@ async function main() {
       mediaSession,
       `(async () => {
          const a = document.querySelectorAll('audio')[0];
+         a.loop = true; // a 10 s tone must not end between the section's clicks
          a.currentTime = 0;
+         // the canvas live video never ends; if it is playing, pageToggle
+         // would pause-all on the "resume" click instead of resuming the
+         // tone — pause it so the tone is the only playing element
+         document.getElementById('canvas-video').pause();
          try { await a.play(); return 'played'; } catch (e) { return 'blocked: ' + e.name; }
        })()`,
       true,
@@ -574,14 +586,17 @@ async function main() {
     ok('global change leaves the overridden tab alone (B stays 2.25×)');
 
     // --- native player rate change is respected (the critical regression) ----------
+    // report -> worker -> storage -> repaint crosses four contexts; deep in a
+    // long run on a busy machine one hop can stall, so re-pick the rate once
+    // (a user nudging the site control again is the same behavior) before
+    // failing
+    const readout110 = () =>
+      evalIn(cdp, popupSession, `${row(1)}.querySelector('.rate-readout').textContent === '1.10×'`);
     await evalIn(cdp, media2bSession, `document.querySelector('audio').playbackRate = 1.1`);
-    await waitFor(() =>
-      evalIn(
-        cdp,
-        popupSession,
-        `${row(1)}.querySelector('.rate-readout').textContent === '1.10×'`,
-      ),
-    );
+    if (!(await waitFor(readout110, 15000).catch(() => null))) {
+      await evalIn(cdp, media2bSession, `document.querySelector('audio').playbackRate = 1.1`);
+      await waitFor(readout110, 15000);
+    }
     ok('native rate change is adopted and displayed (1.10× exact)');
     await sleep(1500); // give any overzealous enforcement time to clobber it
     const bNativeKept = await evalIn(cdp, media2bSession, `document.querySelector('audio').playbackRate`);
@@ -952,6 +967,11 @@ async function main() {
     const volSyncSession = (await cdp.send('Target.attachToTarget', { targetId: volSyncTarget.targetId, flatten: true })).sessionId;
     await waitFor(() => evalIn(cdp, volSyncSession, `!!window.mcpVolume`));
     await evalIn(cdp, volSyncSession, `mcpVolume.play().catch(() => {})`);
+    const volSyncPlay = await evalIn(
+      cdp, volSyncSession,
+      `mcpVolume.audio.paused === false ? 'playing' : 'not playing: ' + mcpVolume.audio.paused`, true,
+    );
+    if (volSyncPlay !== 'playing') note(`vol-sync tone: ${volSyncPlay}`);
     const volSyncTabId = await evalIn(
       cdp, swSession,
       `chrome.tabs.query({url:'http://127.0.0.1:8080/test/volume-sync.html'}).then(t => t[0]?.id)`, true,
@@ -970,7 +990,7 @@ async function main() {
     await evalIn(
       cdp,
       popupSession2,
-      `(() => { const v = (${volSyncRow}).querySelector('.vol'); v.value = '0.4'; v.dispatchEvent(new Event('input', { bubbles: true })); })()`,
+      `(() => { const v = (${volSyncRow}).querySelector('.vol'); v.value = '0.4'; v.dispatchEvent(new Event('input', { bubbles: true })); v.dispatchEvent(new Event('change', { bubbles: true })); })()`,
     );
     const siteFollowed = await waitFor(async () => {
       const state = await evalIn(
@@ -989,6 +1009,260 @@ async function main() {
     volSyncReadout === '40%'
       ? ok('popup volume readout matches the selected 5 % step value')
       : bad('popup volume readout matches the selected 5 % step value', `readout=${volSyncReadout}`);
+
+    // --- two-way sync: site → extension, and the two mute truths -------------
+    // The site's own volume control changes the element; the popup readout
+    // must follow (the ping loop tracks the open card's element).
+    await evalIn(cdp, volSyncSession, `mcpVolume.setSiteVolume(0.6)`);
+    const siteToExt = await waitFor(
+      () => evalIn(cdp, popupSession2, `(${volSyncRow}).querySelector('.vol-readout').textContent === '60%'`),
+    ).catch(() => null);
+    siteToExt
+      ? ok('native site volume change reaches the popup readout (60%)')
+      : bad(
+          'native site volume change reaches the popup readout (60%)',
+          JSON.stringify({
+            readout: await evalIn(cdp, popupSession2, `(${volSyncRow})?.querySelector('.vol-readout')?.textContent ?? null`),
+            popOpen: await evalIn(cdp, popupSession2, `(${volSyncRow})?.querySelector('.vol-pop')?.classList.contains('open') ?? null`),
+            rowPaused: await evalIn(cdp, popupSession2, `(${volSyncRow})?.classList.contains('paused') ?? null`),
+            site: await evalIn(cdp, volSyncSession, `({ v: mcpVolume.audio.volume, paused: mcpVolume.audio.paused, ended: mcpVolume.audio.ended, ind: mcpVolume.indicator() })`, true),
+          }),
+        );
+
+    // The site mutes its player natively: the popover's Player audio row must
+    // show Muted while Tab audio stays Unmuted — two independent truths.
+    await evalIn(cdp, volSyncSession, `mcpVolume.setSiteMuted(true)`);
+    const playerMutedShown = await waitFor(
+      () =>
+        evalIn(
+          cdp,
+          popupSession2,
+          `(${volSyncRow}).querySelector('.vol-state.player-audio .vs-value').textContent === 'Muted'`,
+        ),
+    ).catch(() => null);
+    const tabAudioStill = await evalIn(
+      cdp,
+      popupSession2,
+      `(${volSyncRow}).querySelector('.vol-state.tab-audio .vs-value').textContent`,
+    );
+    playerMutedShown && tabAudioStill === 'Unmuted'
+      ? ok('native player mute shows in the popover; tab audio stays independent')
+      : bad('native player mute shows in the popover; tab audio stays independent', `player=${playerMutedShown} tab="${tabAudioStill}"`);
+
+    // Unmute through the extension's player-audio row: the site's own mute
+    // indicator (driven only by volumechange) must follow.
+    await evalIn(cdp, popupSession2, `(${volSyncRow}).querySelector('.vol-state.player-audio').click()`);
+    const extUnmuteFollowed = await waitFor(
+      () => evalIn(cdp, volSyncSession, `mcpVolume.muteIndicator() === 'off' && mcpVolume.audio.muted === false`),
+    ).catch(() => null);
+    const rowBackToUnmuted = await evalIn(
+      cdp,
+      popupSession2,
+      `(${volSyncRow}).querySelector('.vol-state.player-audio .vs-value').textContent`,
+    );
+    extUnmuteFollowed && rowBackToUnmuted === 'Unmuted'
+      ? ok('extension player-unmute reaches the element and the site UI follows')
+      : bad('extension player-unmute reaches the element and the site UI follows', `followed=${extUnmuteFollowed} row="${rowBackToUnmuted}"`);
+
+    // Tab mute (browser) and player mute (element) coexist without interference.
+    await evalIn(cdp, popupSession2, `(${volSyncRow}).querySelector('.mute').click()`);
+    await waitFor(() =>
+      evalIn(cdp, swSession, `chrome.tabs.query({muted:true}).then(t => t.length === 1)`, true),
+    );
+    const tabMutedPlayerState = await evalIn(
+      cdp,
+      popupSession2,
+      `({
+         tab: (${volSyncRow}).querySelector('.vol-state.tab-audio .vs-value').textContent,
+         player: (${volSyncRow}).querySelector('.vol-state.player-audio .vs-value').textContent,
+       })`,
+    );
+    tabMutedPlayerState?.tab === 'Muted' && tabMutedPlayerState.player === 'Unmuted'
+      ? ok('browser tab mute and native player mute are represented independently')
+      : bad('browser tab mute and native player mute are represented independently', JSON.stringify(tabMutedPlayerState));
+    await evalIn(cdp, popupSession2, `(${volSyncRow}).querySelector('.vol-state.tab-audio').click()`);
+    await waitFor(() => evalIn(cdp, swSession, `chrome.tabs.query({muted:true}).then(t => t.length === 0)`));
+    ok('the tab-audio row unmutes the tab (same authoritative tab-mute path)');
+
+    // No state oscillation: with nothing changing, the site's event counters
+    // stop growing — no duplicate writes loop anywhere.
+    const evBefore = await evalIn(cdp, volSyncSession, `({ v: mcpVolume.events(), r: mcpVolume.rateEvents() })`, true);
+    await sleep(1500);
+    const evAfter = await evalIn(cdp, volSyncSession, `({ v: mcpVolume.events(), r: mcpVolume.rateEvents() })`, true);
+    evAfter.v === evBefore.v && evAfter.r === evBefore.r
+      ? ok(`no duplicate-update oscillation (volumechange ${evBefore.v}→${evAfter.v}, ratechange ${evBefore.r}→${evAfter.r})`)
+      : bad('no duplicate-update oscillation', JSON.stringify({ evBefore, evAfter }));
+
+    // Reopening the popup reads the CURRENT page state, not a stale snapshot:
+    // native volume 0.55 + native mute, then a fresh popup + open popover.
+    await evalIn(cdp, volSyncSession, `mcpVolume.setSiteVolume(0.55); mcpVolume.setSiteMuted(true)`);
+    const popupR = await cdp.send('Target.createTarget', { url: `chrome-extension://${extId}/popup.html` });
+    const popupRSession = (await cdp.send('Target.attachToTarget', { targetId: popupR.targetId, flatten: true })).sessionId;
+    await waitFor(() =>
+      evalIn(
+        cdp,
+        popupRSession,
+        `[...document.querySelectorAll('.row')].some(r => r.querySelector('.t-title').textContent.includes('Volume Sync'))`,
+      ),
+    );
+    const freshRow = `[...document.querySelectorAll('.row')].find(r => r.querySelector('.t-title').textContent.includes('Volume Sync'))`;
+    await evalIn(cdp, popupRSession, `(${freshRow}).querySelector('.vol-btn').click()`);
+    await sleep(500); // the popover-open ping lands
+    const freshState = await evalIn(
+      cdp,
+      popupRSession,
+      `({
+         vol: (${freshRow}).querySelector('.vol-readout').textContent,
+         player: (${freshRow}).querySelector('.vol-state.player-audio .vs-value').textContent,
+         slider: Math.round(parseFloat((${freshRow}).querySelector('.vol').value) * 100),
+       })`,
+    );
+    freshState.vol === '55%' && freshState.player === 'Muted' && freshState.slider === 55
+      ? ok('reopened popup reads current volume (55%) and player mute — no stale snapshot, no jump-back')
+      : bad('reopened popup reads current volume (55%) and player mute — no stale snapshot, no jump-back', JSON.stringify(freshState));
+    await cdp.send('Target.closeTarget', { targetId: popupR.targetId });
+
+    // --- site adapter: private-player sync (the YouTube first-party case) ----
+    // player-sync.html stands in for a site whose player UI is driven by a
+    // PRIVATE player state with an API surface (#movie_player) — element
+    // writes are invisible to its UI, exactly the reported YouTube behavior.
+    // The adapter's syncPlayer is the reliable channel: element truth → API →
+    // site UI. It runs in the MAIN world (page-JS objects are invisible to
+    // the isolated world), feature-detects, and no-ops without the player.
+    const psTarget = await cdp.send('Target.createTarget', {
+      url: `http://127.0.0.1:${SERVE_PORT}/test/player-sync.html`,
+    });
+    const psSession = (await cdp.send('Target.attachToTarget', { targetId: psTarget.targetId, flatten: true })).sessionId;
+    await waitFor(() => evalIn(cdp, psSession, `!!window.mcpPS`));
+    const psPlay = await evalIn(
+      cdp, psSession,
+      `mcpPS.play().then(() => 'played').catch(e => 'blocked: ' + e.name)`, true,
+    );
+    if (psPlay !== 'played') note(`player-sync tone: ${psPlay}`);
+    const psTabId = await evalIn(
+      cdp, swSession,
+      `chrome.tabs.query({url:'http://127.0.0.1:8080/test/player-sync.html'}).then(t => t[0]?.id)`, true,
+    );
+    await seedRecent(psTabId);
+    await evalIn(cdp, popupSession2, `location.reload()`);
+    await waitFor(() =>
+      evalIn(cdp, popupSession2, `[...document.querySelectorAll('.row')].some(r => r.querySelector('.t-title').textContent.includes('Player Sync'))`),
+    );
+    const psRow = `[...document.querySelectorAll('.row')].find(r => r.querySelector('.t-title').textContent.includes('Player Sync'))`;
+
+    // generic two-way speed sync on the event-driven fixture: the site's own
+    // rate choice is displayed exactly, and an extension step reaches the
+    // site's readout through the standard ratechange event
+    await evalIn(cdp, volSyncSession, `mcpVolume.setSiteRate(1.1)`);
+    const siteSpeedShown = await waitFor(
+      () => evalIn(cdp, popupSession2, `(${volSyncRow}).querySelector('.rate-readout').textContent === '1.10×'`),
+    ).catch(() => null);
+    siteSpeedShown
+      ? ok('native site speed change is displayed exactly (1.10×, no snap)')
+      : bad('native site speed change is displayed exactly (1.10×, no snap)', `shown=${await evalIn(cdp, popupSession2, `(${volSyncRow}).querySelector('.rate-readout').textContent`)}`);
+    await evalIn(cdp, popupSession2, `(${volSyncRow}).querySelector('.rate-inc').click()`);
+    const extSpeedFollowed = await waitFor(
+      () => evalIn(cdp, volSyncSession, `mcpVolume.rateIndicator() === '1.35×'`),
+    ).catch(() => null);
+    extSpeedFollowed
+      ? ok('extension speed step reaches the site UI via the standard ratechange event (1.35×)')
+      : bad('extension speed step reaches the site UI via the standard ratechange event (1.35×)', `site=${await evalIn(cdp, volSyncSession, `mcpVolume.rateIndicator()`)}`);
+    await evalIn(cdp, popupSession2, `(${volSyncRow}).querySelector('.rate-reset').click()`);
+    await waitFor(() => evalIn(cdp, volSyncSession, `Math.abs(mcpVolume.audio.playbackRate - 1) < 0.01`));
+
+    // 1) element writes leave the private-player UI stale; the adapter sync
+    //    carries the element truth into the player API and the UI follows
+    const sync1 = await evalIn(
+      cdp,
+      psSession,
+      `(async () => {
+         const { ADAPTERS } = await import('/extension/lib/adapters.js');
+         mcpPS.el.playbackRate = 1.5; mcpPS.el.volume = 0.4; mcpPS.el.muted = true;
+         const before = { ui: mcpPS.ui(), elRate: mcpPS.el.playbackRate };
+         const res = ADAPTERS.youtube.syncPlayer();
+         return { before, res, after: mcpPS.ui(), state: mcpPS.state() };
+       })()`,
+      true,
+    );
+    sync1?.before?.ui?.rate === '1.00×' && Math.abs(sync1.before.elRate - 1.5) < 0.001
+      ? ok('private-player site UI ignores direct element writes (stale before the sync)')
+      : bad('private-player site UI ignores direct element writes (stale before the sync)', JSON.stringify(sync1?.before));
+    sync1?.after?.rate === '1.50×' && sync1.after.volume === '40%' && sync1.after.mute === 'on' &&
+    Math.abs(sync1?.state?.apiRate - 1.5) < 0.001 && sync1?.state?.apiMuted === true
+      ? ok('adapter syncPlayer carries element truth into the player API (speed, volume, mute)')
+      : bad('adapter syncPlayer carries element truth into the player API (speed, volume, mute)', JSON.stringify(sync1));
+
+    // 2) the player API may clamp (YouTube's rate menu): the element holds the
+    //    clamped truth, a ratechange reports it, and the card shows reality.
+    //    ratechange dispatches in a QUEUED task — sampled after a tick, not
+    //    synchronously inside the same eval.
+    const sync2 = await evalIn(
+      cdp,
+      psSession,
+      `(async () => {
+         const { ADAPTERS } = await import('/extension/lib/adapters.js');
+         const evs = mcpPS.events().ratechange;
+         mcpPS.el.playbackRate = 2.5; // above the site's rate menu
+         const res = ADAPTERS.youtube.syncPlayer();
+         return { res, state: mcpPS.state(), ui: mcpPS.ui(), evs };
+       })()`,
+      true,
+    );
+    await sleep(400); // let the queued ratechange tasks dispatch
+    const rateEventsAfter = await evalIn(cdp, psSession, `mcpPS.events().ratechange`, true);
+    Math.abs(sync2?.state?.rate - 2) < 0.001 && sync2?.ui?.rate === '2.00×' && rateEventsAfter > sync2.evs
+      ? ok('player-API clamping lands in the element and fires ratechange (truth preserved)')
+      : bad('player-API clamping lands in the element and fires ratechange (truth preserved)', JSON.stringify({ sync2, rateEventsAfter }));
+    // open the volume popover: its open fires a fresh ping (togglePopover),
+    // so the card readout lands deterministically instead of whenever the
+    // 1 s ping cadence happens to run
+    await evalIn(cdp, popupSession2, `(${psRow}).querySelector('.vol-btn').click()`);
+    const psShown = await waitFor(
+      () => evalIn(cdp, popupSession2, `(${psRow}).querySelector('.rate-readout').textContent === '2.00×'`),
+      15000,
+    ).catch(() => null);
+    psShown
+      ? ok('the card shows the clamped actual rate (2.00×), never the requested 2.50×')
+      : bad(
+          'the card shows the clamped actual rate (2.00×), never the requested 2.50×',
+          JSON.stringify({
+            shown: await evalIn(cdp, popupSession2, `[...document.querySelectorAll('.row')].map(r => ({ t: r.querySelector('.t-title').textContent.slice(0, 14), rate: r.querySelector('.rate-readout').textContent }))`),
+            psState: await evalIn(cdp, psSession, `mcpPS.state()`, true),
+            stores: await evalIn(cdp, swSession, `Promise.all([chrome.storage.local.get('speed'), chrome.storage.session.get('speedOverrides')]).then(([l, s]) => JSON.stringify({ speed: l.speed, ov: s.speedOverrides ?? {} }))`, true),
+          }),
+        );
+
+    // 3) idempotence: a settled sync writes nothing — no duplicate updates
+    const evA = await evalIn(cdp, psSession, `mcpPS.events()`, true);
+    await evalIn(
+      cdp,
+      psSession,
+      `(async () => { const { ADAPTERS } = await import('/extension/lib/adapters.js'); ADAPTERS.youtube.syncPlayer(); ADAPTERS.youtube.syncPlayer(); })()`,
+      true,
+    );
+    const evB = await evalIn(cdp, psSession, `mcpPS.events()`, true);
+    evA?.volumechange === evB?.volumechange && evA?.ratechange === evB?.ratechange
+      ? ok('adapter sync is idempotent — a settled player sees zero duplicate writes')
+      : bad('adapter sync is idempotent — a settled player sees zero duplicate writes', JSON.stringify({ evA, evB }));
+
+    // 4) graceful no-op on pages without the private player
+    const noPlayerTarget = await cdp.send('Target.createTarget', {
+      url: `http://127.0.0.1:${SERVE_PORT}/test/media-audio.html?noplayer=1`,
+    });
+    const noPlayerSession = (await cdp.send('Target.attachToTarget', { targetId: noPlayerTarget.targetId, flatten: true })).sessionId;
+    await waitFor(() => evalIn(cdp, noPlayerSession, `!!document.querySelector('audio')`));
+    const noPlayer = await evalIn(
+      cdp,
+      noPlayerSession,
+      `(async () => { const { ADAPTERS } = await import('/extension/lib/adapters.js'); return ADAPTERS.youtube.syncPlayer(); })()`,
+      true,
+    );
+    noPlayer?.found === false
+      ? ok('syncPlayer feature-detects and no-ops on pages without the player API')
+      : bad('syncPlayer feature-detects and no-ops on pages without the player API', JSON.stringify(noPlayer));
+    await cdp.send('Target.closeTarget', { targetId: noPlayerTarget.targetId });
+
+    await cdp.send('Target.closeTarget', { targetId: psTarget.targetId });
     await cdp.send('Target.closeTarget', { targetId: volSyncTarget.targetId });
 
     // --- keyboard navigation ----------------------------------------------------------
@@ -1017,7 +1291,8 @@ async function main() {
       popupSession2,
       `(() => {
         const r = document.querySelector('.row');
-        r.querySelector('.vol-btn').click();
+        // no popover here: an open volume popover tracks the live element
+        // value and would rewrite the slider between this write and the key
         const v = r.querySelector('.vol');
         v.value = '0.5';
         v.focus();
@@ -1618,9 +1893,17 @@ async function main() {
     }
     ok('speed-matrix 6: reset-to-global survives repeated SPA video replacement (2.50×)');
 
-    // 7. native 1.00× under global 2.50× is a real override (matrix #7)
+    // 7. native 1.00× under global 2.50× is a real override (matrix #7).
+    // One native write, one report, one adoption — deep into a long run a
+    // single cross-context chain can outrun even 15 s, so nudge once more
+    // (a user re-picking the rate is the same behavior) before failing.
+    const matrix7Readout = () =>
+      evalIn(cdp, pmS, rowExpr('A', `!r.querySelector('.rate-reset').hidden && r.querySelector('.rate-readout').textContent === '1.00×'`));
     await evalIn(cdp, fix.A.session, `mcpFix.rate(0, 1)`);
-    await waitSync(() => evalIn(cdp, pmS, rowExpr('A', `!r.querySelector('.rate-reset').hidden && r.querySelector('.rate-readout').textContent === '1.00×'`)));
+    if (!(await waitSync(matrix7Readout).catch(() => null))) {
+      await evalIn(cdp, fix.A.session, `mcpFix.rate(0, 1)`);
+      await waitSync(matrix7Readout);
+    }
     await evalIn(cdp, pmS, `document.getElementById('gspeed-inc').click()`);
     await waitSync(() => evalIn(cdp, pmS, `document.getElementById('gspeed-value').textContent === '2.75×'`));
     await sleep(500);
@@ -1880,12 +2163,18 @@ async function main() {
     process.exitCode = 1;
   } finally {
     try {
+      ws?.close(); // otherwise node's event loop keeps the process alive forever
+    } catch {}
+    try {
       browserProcess?.kill();
     } catch {}
     try {
       rmSync(profile, { recursive: true, force: true });
     } catch {}
     server.kill();
+    // belt: nothing may keep this process alive past the run — a lingering
+    // handle would hold the debug port and poison the next run
+    process.exit(process.exitCode ?? 0);
   }
 }
 

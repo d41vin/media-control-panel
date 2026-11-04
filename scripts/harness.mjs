@@ -91,9 +91,16 @@ async function main() {
   const server = spawn(process.execPath, [join(ROOT, 'serve.mjs')], { stdio: 'ignore' });
   const profile = mkdtempSync(join(tmpdir(), 'mcp-harness-'));
   let browserProcess = null;
+  let ws = null;
   let failed = false;
 
   try {
+    // a zombie browser from a killed/failed run holds the debug port; attaching
+    // to it would drive a stale session (old tabs, old extension) and produce
+    // phantom assertions — refuse to run instead
+    if (!(await fetch(`http://127.0.0.1:${PORT}/json/version`).then(() => false, () => true))) {
+      throw new Error(`debug port ${PORT} is already in use — kill the leftover test browser first`);
+    }
     await waitFor(async () => {
       const r = await fetch(`http://127.0.0.1:${SERVE_PORT}/test/background-mock.html`);
       return r.ok;
@@ -128,7 +135,7 @@ async function main() {
       const j = await r.json();
       return j.webSocketDebuggerUrl;
     }, 30000);
-    const ws = new WebSocket(wsUrl);
+    ws = new WebSocket(wsUrl);
     await new Promise((res, rej) => {
       ws.addEventListener('open', res);
       ws.addEventListener('error', rej);
@@ -228,6 +235,35 @@ async function main() {
          first.querySelector('.mute').click();
          await new Promise((r) => setTimeout(r, 200));
          mute.afterUnmute = first.querySelector('.mute').getAttribute('aria-label');
+         // volume popover: the two independent audio truths, and the
+         // player-audio toggle writing the element (not the tab)
+         first.querySelector('.vol-btn').click();
+         await new Promise((r) => setTimeout(r, 250));
+         const audioTruths = {
+           tab: first.querySelector('.vol-state.tab-audio .vs-value').textContent,
+           player: first.querySelector('.vol-state.player-audio .vs-value').textContent,
+         };
+         first.querySelector('.vol-state.player-audio').click();
+         await new Promise((r) => setTimeout(r, 350));
+         audioTruths.playerAfterToggle =
+           first.querySelector('.vol-state.player-audio .vs-value').textContent;
+         audioTruths.elementMuted = chrome._mock.tabs.get(1)._elements[0].muted;
+         audioTruths.tabStillUnmuted = !chrome._mock.tabs.get(1).mutedInfo.muted;
+         first.querySelector('.vol-state.player-audio').click();
+         await new Promise((r) => setTimeout(r, 350));
+         audioTruths.playerRestored =
+           first.querySelector('.vol-state.player-audio .vs-value').textContent;
+         audioTruths.elementRestored = chrome._mock.tabs.get(1)._elements[0].muted;
+         // a volume change on an adapter-host row also invokes the MAIN-world
+         // player-API sync — the private-player channel (the YouTube case)
+         const volMove = first.querySelector('.vol');
+         volMove.value = '0.45';
+         volMove.dispatchEvent(new Event('input', { bubbles: true }));
+         volMove.dispatchEvent(new Event('change', { bubbles: true }));
+         await new Promise((r) => setTimeout(r, 500));
+         audioTruths.playerSyncWired = chrome._mock.scriptingCalls.some(
+           (c) => c.func === 'ytSyncPlayer' && c.world === 'MAIN' && c.target.tabId === 1,
+         );
          return {
            rows: rows.length,
            gspeed: document.getElementById('gspeed-value').textContent,
@@ -236,6 +272,7 @@ async function main() {
            volStep,
            boostStep,
            mute,
+           audioTruths,
          };
        })()`,
       true,
@@ -257,16 +294,26 @@ async function main() {
       pmState.mute.badge === true &&
       pmState.mute.browser === true &&
       pmState.mute.afterUnmute === 'Mute tab';
+    const t = pmState?.audioTruths;
+    const audioTruthsOk =
+      t?.tab === 'Unmuted' &&
+      t?.player === 'Unmuted' &&
+      t?.playerAfterToggle === 'Muted' &&
+      t?.elementMuted === true &&
+      t?.tabStillUnmuted === true &&
+      t?.playerRestored === 'Unmuted' &&
+      t?.elementRestored === false &&
+      t?.playerSyncWired === true;
     if (cdp.pageErrors.length) {
       failed = true;
       for (const e of cdp.pageErrors) console.error(`FAIL  popup-mock page error: ${e}`);
     } else if (pmRows < 1 || !pmState.gspeed.startsWith('1.25')) {
       failed = true;
       console.error(`FAIL  popup-mock smoke: rows=${pmRows} state=${JSON.stringify(pmState)}`);
-    } else if (!themeOk || !stepsOk || !muteOk) {
+    } else if (!themeOk || !stepsOk || !muteOk || !audioTruthsOk) {
       failed = true;
       console.error(
-        `FAIL  popup-mock behavior: theme=${themeOk} steps=${stepsOk} mute=${muteOk} state=${JSON.stringify(pmState)}`,
+        `FAIL  popup-mock behavior: theme=${themeOk} steps=${stepsOk} mute=${muteOk} audioTruths=${audioTruthsOk} state=${JSON.stringify(pmState)}`,
       );
     } else {
       console.log(`  ok  popup-mock smoke: ${pmRows} row(s), global ${pmState.gspeed}, override shown: ${pmState.overridden}`);
@@ -274,6 +321,7 @@ async function main() {
         `  ok  popup-mock settings: theme dark/light/system repaint, vol step ${pmState.volStep}, boost step ${pmState.boostStep}`,
       );
       console.log('  ok  popup-mock quick mute stays muted for 3.3 s (browser + UI)');
+      console.log('  ok  popup-mock volume popover: tab audio and player audio independent, player toggle writes the element');
     }
 
     if (failed) process.exitCode = 1;
@@ -283,12 +331,18 @@ async function main() {
     process.exitCode = 1;
   } finally {
     try {
+      ws?.close(); // otherwise node's event loop keeps the process alive forever
+    } catch {}
+    try {
       browserProcess?.kill();
     } catch {}
     try {
       rmSync(profile, { recursive: true, force: true });
     } catch {}
     server.kill();
+    // belt: nothing may keep this process alive past the run — a lingering
+    // handle would hold the debug port and poison the next run
+    process.exit(process.exitCode ?? 0);
   }
 }
 

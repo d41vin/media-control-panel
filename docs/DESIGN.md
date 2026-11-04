@@ -200,6 +200,54 @@ stale read that began before a mute command is discarded by the row's command
 timestamp, and `makeRow` reuses an existing record instead of appending a
 duplicate card, so the icon the user clicked is the icon that updates.
 
+## Two audio truths and player-API sync (normative)
+
+The extension distinguishes two independent mute states and never merges
+them. The volume popover names both, side by side, each row its own toggle:
+
+| State | Owner | Written through | Popup surface |
+|---|---|---|---|
+| Browser tab mute | Chrome (`tab.mutedInfo`) | `chrome.tabs.update({muted})` | card speaker icon, popover "Tab audio" row, Mute all, Alt+Shift+M |
+| Native player mute | the media element (`muted`) / supported player API | element write (`pageSetMuted`) | popover "Player audio" row |
+| Normal volume | the media element (`volume`) | element write (`pageSetVolume`) | popover slider + readout |
+| Tab boost | the capture pipeline | offscreen gain node | boost chip + popover |
+
+- **M1 (independence).** Tab mute and player mute are written through
+  different channels and can disagree; no code path lets one reverse the
+  other. A native player mute never touches `tabs.update`, and tab mute
+  never writes an element.
+- **M2 (site → extension).** A native player change (the site's own mute
+  button, volume slider or rate menu) reaches the popup through observation:
+  the ping loop of an open card carries the primary element's `muted` and
+  `volume`, and the volume popover keeps that loop alive even for PAUSED
+  media while it is open. Opening the popover fires one fresh ping, so the
+  slider shows the element's current truth — never the snapshot from when
+  the popup or probe was new, and never a jump-back from an older probe.
+- **M3 (extension → site, generic).** Extension writes land on the element;
+  the standard `volumechange`/`ratechange` events carry them to any site
+  that listens (`test/volume-sync.html` proves it with no adapter). The
+  popup readout always reflects what actually landed: a site that rounds or
+  clamps is corrected by the confirmation ping.
+- **Y1 (private players).** A player that keeps its own UI state — YouTube's
+  first-party player is the reported case — ignores element writes in its
+  UI. It is synchronized through its documented API surface (`#movie_player`,
+  the method names the official IFrame Player API exposes) by an isolated
+  adapter capability: `syncPlayer`, MAIN world (the API lives on page-world
+  objects the isolated world cannot see), host-gated to known hosts,
+  feature-detected, compare-only. It carries ELEMENT truth → API → site UI,
+  never the reverse; the API's own writes reach the element and are observed
+  through the standard events. If the API clamps (YouTube's rate menu tops
+  out at 2.00×), the element holds the clamped value, `ratechange` reports
+  it and R5 adopts it — the popup displays the actual observed rate, not the
+  request.
+- **Y2 (when syncs fire).** After every speed apply on an adapter-host tab
+  (background), and after every popup-initiated volume/player-mute write
+  there, exactly one `syncPlayer` runs. A settled player sees zero writes —
+  idempotence is asserted in the E2E rig. Sites without a reliable public
+  player API (Spotify, SoundCloud web players) declare no sync capability:
+  element truth stays the display source, and next/prev remains their only
+  adapter surface.
+
 ## Appearance
 
 One `theme` preference (`system` | `light` | `dark`, default `system`) lives

@@ -265,6 +265,18 @@
       `calls=${JSON.stringify(mock.scriptingCalls.map((c) => [c.func, c.args?.[0]]))}`,
     );
 
+    // Adapter-host tabs (YouTube) also get the MAIN-world player-API sync so
+    // the site's own UI follows the enforced rate; non-adapter hosts do not.
+    await until(() => mock.scriptingCalls.some((c) => c.func === 'ytSyncPlayer' && c.world === 'MAIN'));
+    const syncTargets = mock.scriptingCalls
+      .filter((c) => c.func === 'ytSyncPlayer')
+      .map((c) => c.target.tabId);
+    assert(
+      'speed applies on adapter hosts trigger the MAIN-world player-API sync',
+      syncTargets.length > 0 && syncTargets.every((id) => id === 1),
+      `ytSyncPlayer targets=${JSON.stringify(syncTargets)}`,
+    );
+
     // A page-originated rate change is adopted as an override, not fought.
     mock.fireMessageFromTab({ type: 'mcp-speed-report', rate: 1.1, rev: await curRev(1) }, 1);
     await until(async () => {

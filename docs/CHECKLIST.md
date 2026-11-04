@@ -22,14 +22,16 @@ and reopen the popup (stale assets are the #1 "it's broken" cause).
 | 6 | Exclusive playback | Two tabs playing → `Alt+click` play on one card | The clicked tab plays, the other pauses; nothing changes if the clicked card has no playable media |
 | 7 | Seek | Drag the position slider | Video jumps; readout matches the page player |
 | 8 | ±10 s | Click `−10S` / `+10S` | Page skips 10 s back/forward |
-| 9 | Volume popover | Click the speaker icon, drag the slider | Element volume follows in 5 % steps; popover readout matches the value; closing and reopening shows the real value; a site that listens to `volumechange` (fixture `test/volume-sync.html`) moves its own indicator |
+| 9 | Volume popover | Click the speaker icon, drag the slider | Element volume follows in 5 % steps; popover readout matches the value; closing and reopening shows the real value (a fresh read, no stale snapshot); a site that listens to `volumechange` (fixture `test/volume-sync.html`) moves its own indicator |
+| 9b | Two audio truths | Open the volume popover and look at the two state rows | `TAB AUDIO` shows the browser tab mute, `PLAYER AUDIO` shows the page player's own mute — they can disagree; each row toggles only its own state (the player row writes the element, never the tab) |
+| 9c | Native player mute recognized | Mute the player on the site itself (its own button) | The popover's `PLAYER AUDIO` row flips to `Muted` (accent) within a second while the card is open; `TAB AUDIO` stays `Unmuted` |
 | 10 | LIVE | Open a live stream | Seek slider replaced by red `LIVE` tag; ±10 s disabled |
 | 11 | Multi-element | Fixture page (`npm run serve` → `localhost:8080/test/media-page.html`) | Site line shows `· ×N`; controls target the playing element |
 | 12 | Switch tab | Click a card title (or the menu's `Switch to tab`) | Jumps to that tab and focuses its window |
 | 13 | Close tab | Menu → `Close tab` | Tab closes; card disappears; badge updates |
 | 14 | PiP | Click `PIP` on a video card | Floating video window; button accent while active; click again to return. No PiP button on audio-only cards |
 | 15 | Track adapters | Open YouTube / Spotify / SoundCloud | `⏮` `⏭` flank the timeline on that card only; `⏭`/`⏮` skip tracks. On the first playlist video YouTube hides its prev button and the popup's `⏮` is disabled (hidden/aria-disabled/disabled all count) |
-| 16 | Tab mute | Click the speaker icon in the card head | Tab silenced **without pausing**; struck-speaker badge appears; hold for 3+ s — it stays muted, the icon stays struck, and the tab strip agrees. Unmute restores |
+| 16 | Tab mute | Click the speaker icon in the card head | Tab silenced **without pausing**; struck-speaker badge appears; hold for 3+ s — it stays muted, the icon stays struck, and the tab strip agrees. Unmute restores . The popover's `TAB AUDIO` row shows and toggles the same state |
 | 17 | Mute all / Unmute all | Two tabs playing → `MUTE ALL` | Both muted; label flips to `UNMUTE ALL`; click restores |
 | 18 | Pause all | `PAUSE ALL` | Every playing tab pauses, embeds included |
 | 19 | Badge | Play media in two tabs | Badge shows `2`; pause both → badge disappears |
@@ -73,6 +75,8 @@ and reopen the popup (stale assets are the #1 "it's broken" cause).
 | 43 | Override marker | With an override active | Value accent + dotted underline; `↺` appears; tooltip names both rates; global bar counts `1 PAGE OVERRIDE` |
 | 44 | Global doesn't fight it | Change the global speed | Overridden tab keeps its rate; inheriting tabs move |
 | 45 | Native player respect | On YouTube, pick 1.5× in the site's own speed menu | Card shows `1.50×` as a page override and never snaps it back |
+| 45b | Extension speed reaches YouTube's menu | Set a page speed from the card stepper (or the global bar) on YouTube | The video rate changes AND YouTube's own speed menu/indicator follows (the adapter syncs the player API); if YouTube clamps (its menu tops out at 2.00×), the card shows the clamped actual rate |
+| 45c | Extension volume reaches YouTube's indicator | Move the volume slider on a YouTube card | The audio changes and YouTube's own volume UI follows (player-API sync); the popup readout shows the value that actually landed |
 | 46 | Exact rates | Site sets 1.10× (e.g. via its menu or JS) | Card shows `1.10×` — never rounded to the 0.25× grid |
 | 47 | Observed rate at 1.00× | Global 1.00×, no override; a site plays at its own non-default rate | Card shows the site's actual rate (tooltip: "Website-set rate") — not a false `1.00×`; a step from the card builds on that rate |
 | 48 | Reset to global | Click the card's `↺` | Media returns to the global rate; override marker gone |
@@ -125,11 +129,12 @@ still initializing are treated as setup and re-stamped, so a player's own
 happened and the reset button is the escape hatch. Boost capture requires the
 `activeTab` grant on the target tab (declared in the manifest; a real toolbar
 invocation grants it) — starting capture on a background tab is refused by the
-browser, which is why the control is gated to the viewed tab. A site that owns
-its volume UI and ignores the standard `volumechange` event (YouTube is the
-reported case) may keep showing its own volume percentage even though the
-element volume — and the sound — really changed; the popup readout and element
-volume stay truthful. The action popup's outer frame is square and
+browser, which is why the control is gated to the viewed tab. A site that owns its volume UI and ignores the standard `volumechange` event is
+synchronized only where a documented player API exists (YouTube's first-party
+player, via the host-gated adapter capability) — Spotify and SoundCloud's web
+players expose no reliable public API, so on those sites the popup readout and
+element volume stay truthful while the site's own indicator keeps its own
+state; verify YouTube's menu/indicator sync by hand (#45b, #45c). The action popup's outer frame is square and
 browser-owned; the document paints the theme paper to the frame edges (no gap)
 and keeps the rounded cards/popovers inside. Verify visually with the
 extension loaded, in both themes.
