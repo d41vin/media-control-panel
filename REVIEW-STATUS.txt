@@ -1,0 +1,69 @@
+media-control-panel — release status
+
+What this archive is
+  The unpacked extension at the archive root (manifest.json), together with its
+  test fixtures, scripts, documentation and screenshots.
+
+Loading
+  Chrome: chrome://extensions -> Developer mode -> Load unpacked -> select the
+  extracted folder (in the repository this is the extension/ folder).
+  Edge: same flow; Edge is supported as an optional secondary browser.
+
+Tested browser
+  Primary: Google Chrome 156.0.8078.76
+    (C:/Program Files (x86)/Google/Chrome/Application/chrome.exe)
+  This is the last verified version as of 2026-11-04. Nothing implies later
+  Chrome versions behave identically; rerun the checks after a browser update.
+  Optional secondary: Microsoft Edge — MCP_BROWSER=edge selects it in the rigs.
+
+Implementation baseline tested
+  Commit 8d9fe6c ("test: verify the suites in Google Chrome; capture the real
+  action popup"). This documentation pass is a separate commit on top; it does
+  not change extension behavior.
+
+Verification at the baseline (2026-11-04)
+  npm test                 passed (static checks, no browser)
+  npm run harness          passed — 79 background assertions + popup mock
+  npm run e2e              122/122 in Google Chrome 156.0.8078.76
+  npm run youtube-check    13/13 in Google Chrome 156.0.8078.76, real youtube.com
+  npm run verify-capture   ran; records the browser's activeTab refusal
+                           (see the manual check below)
+  The test rigs default to Chrome; branded Chrome 137+ ignores
+  --load-extension, so they launch with --enable-unsafe-extension-debugging
+  and load the unpacked extension through the DevTools Extensions domain
+  (Extensions.loadUnpacked). Edge keeps its command-line loading path.
+  Each run uses an isolated temporary profile.
+
+Scope of each check
+  npm run harness       real background.js + popup.js against an in-memory
+                        chrome.* mock; no installed extension, no network.
+  npm run e2e           unpacked extension in real Chrome; popup driven as an
+                        extension page; full feature and regression matrix.
+  npm run youtube-check real youtube.com in a headed Chrome window: mute
+                        matrix and actual playback at 2x-16x.
+  npm run shots         regenerates the screenshots from the REAL action popup
+                        (chrome.action.openPopup) via CDP.
+
+Known limitations
+  - YouTube synchronization uses the first-party player's INTERNAL
+    #movie_player methods (the same names the IFrame API uses). They are NOT
+    the official YouTube IFrame Player API, are undocumented, and may change;
+    the adapter feature-detects them and falls back to the media element,
+    which always works but may not move YouTube's own UI.
+  - Spotify and SoundCloud expose no reliable public player API: their native
+    UI is not synchronized (element-level readout stays truthful).
+  - The action popup's outer frame, shadow and window decorations are owned by
+    the browser (square on Chrome). CSS styles only the popup content; the
+    document paints the theme colour edge to edge. Screenshots show the popup
+    content, not the browser-owned frame.
+  - Media inside closed shadow roots, DRM-protected pages and WebAudio-only
+    playback is unreachable for this kind of extension.
+  - MediaStream (srcObject) elements are skipped by the speed manager
+    (Chromium clamps their playbackRate).
+
+Manual checks that remain
+  - Boost capture started from a real toolbar click (the activeTab grant cannot
+    be granted by automation; verify-capture records the refusal).
+  - Audibility by ear: boost loudness/distortion/leakage (CHECKLIST #53).
+  - YouTube menu/indicator sync on the current YouTube build (CHECKLIST #45b,
+    #45c).

@@ -3,7 +3,8 @@
 //
 //   node scripts/verify-capture.mjs     (also: npm run verify-capture)
 //
-// What it does, with a real Edge window and real CDP mouse input:
+// What it does, with a real headed browser window (Chrome by default, Edge
+// via MCP_BROWSER=edge) and real CDP mouse input:
 //   1. plays the audio fixture, opens the REAL action popup
 //      (chrome.action.openPopup), and clicks through the boost control —
 //      the documented active-tab flow;
@@ -13,12 +14,14 @@
 //      tabCapture.getMediaStreamId for (a) the viewed tab and (b) a
 //      background tab, recording which one the browser allows.
 //
-// A brief Edge window will open on the desktop while this runs. The fixture
-// tone plays at reduced volume. Exit code 0 = the probe ran (capture outcomes
-// are REPORTED, not failed); setup failures exit non-zero.
+// A brief browser window will open on the desktop while this runs (isolated
+// temporary profile). The fixture tone plays at reduced volume. Exit code 0 =
+// the probe ran (capture outcomes are REPORTED, not failed); setup failures
+// exit non-zero.
 //
-// Results (2026-10-29, Edge 156, Windows): recorded in docs/RESEARCH.md and
-// the README boost section.
+// Historical results (2026-10-29, Edge 156, Windows): recorded in
+// docs/RESEARCH.md and the README boost section. The activeTab refusal is a
+// browser rule, not an Edge quirk.
 
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';

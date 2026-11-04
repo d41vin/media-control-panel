@@ -2,6 +2,48 @@
 
 Findings that shaped the v2.0 architecture. Sources listed at the bottom.
 
+## Current state (2026-11-04) — read this first
+
+The dated sections below are the research log as it was written; where they
+mention Edge, an old assertion count, or "YouTube's volume UI cannot be
+synchronized", they describe that point in time and are superseded by this
+summary.
+
+- **Browsers.** Google Chrome is the primary browser and the browser the
+  extension is used in. Microsoft Edge is an optional secondary target for
+  compatibility checks. `scripts/browser.mjs` selects Chrome by default
+  (autodetected from its install path) and `MCP_BROWSER=edge` forces Edge;
+  every test run prints the executable and its file version.
+- **Loading the unpacked extension for tests.** Branded Chrome 137+ ignores
+  `--load-extension` (and the `DisableLoadExtensionCommandLineSwitch`
+  workaround). The Chrome path is the DevTools `Extensions` domain: launch
+  with `--enable-unsafe-extension-debugging` and call
+  `Extensions.loadUnpacked` over the browser-level CDP connection. Edge keeps
+  its separate command-line flags. Every rig uses an isolated temporary
+  profile — never the user's normal browser profile.
+- **Tests and last results.** `npm test` (static) and `npm run harness`
+  (headless mock pages: real `background.js` + `popup.js` against an in-memory
+  `chrome.*` mock) need no extension install; `npm run e2e` loads the unpacked
+  extension in real Chrome and drives the popup as an extension page;
+  `npm run youtube-check` drives real youtube.com in a headed window. Last
+  verified in **Google Chrome 156.0.8078.76 (2026-11-04)**: `npm test` passed,
+  harness passed (79 background assertions + popup mock), `npm run e2e`
+  122/122, `npm run youtube-check` 13/13 (mute matrix against real
+  youtube.com, actual playback at 2× / 2.5× / 4× / 8× / 16×).
+- **Synchronization model.** Generic pages are controlled at the media-element
+  level; standard `volumechange`/`ratechange` events carry changes both ways.
+  YouTube's first-party player owns its UI state, so the adapter uses
+  feature-detected **internal** `#movie_player` methods (speed, volume, mute)
+  — these are not the official YouTube IFrame Player API, are undocumented and
+  may change; without them the element fallback applies. Spotify and
+  SoundCloud expose no reliable public player API, so their native UI is not
+  synchronized. Tab audio mute (browser tab API) and player audio mute (the
+  site player) are independent throughout.
+- **Screenshots** are captured from the real action popup
+  (`chrome.action.openPopup()` in a headed Chrome window) over CDP. The bubble's
+  outer frame/shadow is browser-owned and is not part of the capture; CSS
+  styles only the popup content.
+
 ## The pivot: side panel → action popup
 
 v0.1 used a side panel with a content script injected into every page
@@ -23,7 +65,7 @@ prev/next and a seek bar. Internally it is powered by the MediaSessionService in
 the browser process — **extensions cannot read Chrome's session list**. Every
 extension in this space rebuilds an approximation from public APIs. Chrome's
 panel also only *controls one session at a time*; batch control (pause all,
-mute all) is a real gap we fill.
+mute browser tab audio everywhere) is a real gap we fill.
 
 What we adopt: the popup form factor, one-row-per-playing-tab, the seek bar with
 times, and the "toolbar icon shows you something is playing" affordance (our
@@ -151,15 +193,16 @@ can appear until probed (probe filters them).
   `DisableLoadExtensionCommandLineSwitch` workaround is also gone), and
   Chrome's own component extensions also register `service_worker` targets —
   match the worker by `url.endsWith('/background.js')`, never by scheme alone.
-- The E2E rig (`scripts/e2e.mjs`) therefore drives **Edge** (Chromium, still
-  honors `--load-extension`) over raw CDP with node's built-in WebSocket:
-  popup.html opened as a page behaves like the real popup with full
-  `chrome.*` context. 58 assertions, all passing.
-- Edge rejects `Alt+Shift+P` (unassigned); it stays as the suggested key for
-  Chrome, and every command is user-remappable.
+- *(Historical, 2026-10-era rig — superseded by the Chrome-first setup in
+  "Current state".)* The E2E rig (`scripts/e2e.mjs`) therefore drove **Edge**
+  (Chromium, still honors `--load-extension`) over raw CDP with node's
+  built-in WebSocket: popup.html opened as a page behaves like the real popup
+  with full `chrome.*` context. 58 assertions at that time.
+- *(Historical.)* Edge rejected `Alt+Shift+P` (unassigned); it stays as the
+  suggested key, and every command is user-remappable.
 - A browser binary was once downloaded into this OneDrive-synced repo for
-  testing and the antivirus flagged it; it was removed immediately and the
-  rig uses the installed Edge instead. Don't ship binaries in synced repos.
+  testing and the antivirus flagged it; it was removed immediately and the rig
+  uses the installed browser instead. Don't ship binaries in synced repos.
 - **Headless environments can stop reporting `tab.audible`** while elements
   keep playing fine (observed mid-session on real hardware). The E2E rig
   detects this and gates only the audible-event-driven assertions (badge,
@@ -521,7 +564,7 @@ headless and headed Edge, real action popup with real CDP mouse input, mute
 via the card and via `chrome.tabs.update`, sampling `chrome.tabs.get(tabId)`
 and the popup icon at 0/500/1000/3000 ms. The browser's `mutedInfo` stayed
 `{muted: true, reason: 'extension'}` and the icon stayed struck in every
-sample; the only unmute paths in the codebase are the explicit Mute all /
+sample; the only unmute paths in the codebase are the explicit Mute tabs /
 `Alt+Shift+M` actions. Two latent state bugs were still worth fixing: an
 `onUpdated`-driven adoption during popup init could append a **second DOM
 card** for the same tab (the clicked card and the row record could differ),

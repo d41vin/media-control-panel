@@ -1,12 +1,14 @@
-// Browser harness runner: loads the two mock pages in real Edge (headless)
-// and reports their results.
+// Browser harness runner: loads the two mock pages in a real headless
+// browser — Google Chrome by default, Edge via MCP_BROWSER=edge — and reports
+// their results. No extension is installed here: the pages run the real
+// background.js / popup.js against an in-memory chrome.* mock.
 //
 //   node scripts/harness.mjs     (also: npm run harness)
 //
 //   - test/background-mock.html runs its assertions on load and encodes the
 //     outcome in document.title ("PASS (n) — background harness" / "FAILED (n)").
-//   - test/popup-mock.html drives the real popup against the mock browser; it
-//     has no assertions — the runner fails on any page exception or console
+//   - test/popup-mock.html drives the real popup UI against the mock browser;
+//     it has no assertions — the runner fails on any page exception or console
 //     error while it runs.
 //
 // Exits non-zero on any failure.

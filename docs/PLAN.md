@@ -5,9 +5,11 @@ Controls behavior, Swiss design — pure HTML/CSS/JS, no build step, no
 frameworks, minimal idle resource use. See RESEARCH.md for why and DESIGN.md
 for the look.
 
-**Status: v2.0 shipped; v2.1 (media cards, global speed with page overrides,
-tab volume boost) shipped.** Build order below was followed; deviations and
-additions are recorded in git history.
+**Status: v2.0 and v2.1 shipped; the project is finished for now.** The final
+release (player-owned mute synchronization, 16× speed range, Chrome-first
+verification) is documented in README.md and DESIGN.md and was last verified in
+Google Chrome 156.0.8078.76 on 2026-11-04. Build order below was followed;
+deviations and additions are recorded in git history.
 
 ## Architecture
 
@@ -23,8 +25,11 @@ extension/
   lib/manager.js       conditional page-level speed manager (event-driven,
                        self-removing), injected only while a policy is active
   lib/speed.js         shared speed model (range, stepping, formatting, storage)
-  lib/adapters.js      per-site next/prev track (YouTube/Spotify/SoundCloud),
-                       injected only on click
+  lib/adapters.js      per-site capabilities: next/prev track
+                       (YouTube/Spotify/SoundCloud, injected on click) plus the
+                       YouTube player integration (MAIN world, feature-detected
+                       internal #movie_player methods — next/prev and
+                       speed/volume/mute sync; see DESIGN.md Y1/Y2)
   lib/settings.js      shared settings model (chrome.storage.local)
   offscreen.html/js    audio boost pipeline (capture → gain → limiter → output)
   icons/               generated Swiss mark (scripts/make-icons.mjs)
@@ -110,14 +115,39 @@ Shipped since the v2.0 release (tracked in git history):
    5 %/10 % slider steps, adapter hidden-state handling, standard-volumechange
    fixture, and frame-gap-free theming.
 
-Still open:
+## Not built — optional or deferred, not unfinished work
 
-11. Playlist autoplay (needs injected `ended` listeners — weigh idle cost).
-12. Boost limiter tuning / optional compressor presets for music vs speech.
-13. Remembering speed per hostname (opt-in; currently per-page, per-session).
-14. Final capture-success confirmation with a real toolbar-button click on a
-    normal desktop (the activeTab grant cannot be granted by automation —
-    `npm run verify-capture` documents the browser's behavior otherwise).
+These were considered and deliberately left out; none is required for the
+extension to be complete:
+
+- Playlist autoplay (would need injected `ended` listeners — weighed against
+  the idle cost).
+- Boost limiter tuning / optional compressor presets for music vs speech.
+- Remembering speed per hostname (opt-in; speed is currently per-page
+  override, session-scoped).
+
+## Known limitations (by design or platform)
+
+- Closed shadow roots, DRM-protected pages and WebAudio-only playback are
+  unreachable for every extension in this category.
+- Native player UI synchronization exists only for YouTube, through its
+  feature-detected **internal** `#movie_player` methods (not the official
+  IFrame Player API; they may change). Element-level control remains the
+  fallback.
+- Spotify and SoundCloud expose no reliable public player API: no native UI
+  synchronization there.
+- The action popup's outer frame is browser-owned (square on Chrome); the
+  extension styles only the content surface.
+- Boost audibility/distortion cannot be judged by automation.
+
+## Manual checks that remain
+
+- **Capture success with a real toolbar click.** The `activeTab` grant cannot
+  be granted by automation, so `npm run verify-capture` records the browser's
+  refusal instead; start a boost from a real toolbar invocation to confirm
+  capture on a normal desktop (CHECKLIST #59d).
+- Audio quality by ear: boost loudness/distortion/leakage (CHECKLIST #53) and
+  the YouTube menu/indicator sync (#45b, #45c).
 
 ## Build order (one conventional commit each)
 

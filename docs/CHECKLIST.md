@@ -4,8 +4,9 @@ How to test every feature by hand and what to expect. The automated layers
 (`npm test`, `npm run harness`, `npm run e2e`, `npm run youtube-check`) cover
 most of this — this checklist is the human pass on real Chrome with real
 sites, and it is the only place where **actual audibility** can be judged.
-Chrome is the primary verified browser (the suites also run in Edge via
-`MCP_BROWSER=edge`).
+Chrome is the primary verified browser: the automated layers were last run in
+Google Chrome **156.0.8078.76** on 2026-11-04. Edge remains available as an
+optional secondary browser (`MCP_BROWSER=edge`).
 
 **Setup:** `chrome://extensions` → Developer mode → **Load unpacked** → select
 `extension/`. After every code update click **Reload** on the extension card
@@ -80,8 +81,8 @@ and reopen the popup (stale assets are the #1 "it's broken" cause).
 | 43 | Override marker | With an override active | Value accent + dotted underline; `↺` appears; tooltip names both rates; global bar counts `1 PAGE OVERRIDE` |
 | 44 | Global doesn't fight it | Change the global speed | Overridden tab keeps its rate; inheriting tabs move |
 | 45 | Native player respect | On YouTube, pick 1.5× in the site's own speed menu | Card shows `1.50×` as a page override and never snaps it back |
-| 45b | Extension speed reaches YouTube's menu | Set a page speed from the card stepper (or the global bar) on YouTube | The video rate changes AND YouTube's own speed menu/indicator follows (the adapter syncs the player API); if YouTube clamps (its menu tops out at 2.00×), the card shows the clamped actual rate |
-| 45c | Extension volume reaches YouTube's indicator | Move the volume slider on a YouTube card | The audio changes and YouTube's own volume UI follows (player-API sync); the popup readout shows the value that actually landed |
+| 45b | Extension speed reaches YouTube's menu | Set a page speed from the card stepper (or the global bar) on YouTube | The video plays at the requested rate AND YouTube's own speed menu/indicator follows where its internal player methods exist (the adapter uses the feature-detected internal `#movie_player` interface — undocumented and changeable, not the official IFrame API). YouTube's menu tops out at 2.00×; above that the media still runs faster and the card shows the element's real rate |
+| 45c | Extension volume reaches YouTube's indicator | Move the volume slider on a YouTube card | The audio changes and YouTube's own volume UI follows through the same internal player methods; the popup readout shows the value that actually landed. Without those methods the element volume still applies and the readout stays truthful |
 | 46 | Exact rates | Site sets 1.10× (e.g. via its menu or JS) | Card shows `1.10×` — never rounded to the 0.25× grid |
 | 47 | Observed rate at 1.00× | Global 1.00×, no override; a site plays at its own non-default rate | Card shows the site's actual rate (tooltip: "Website-set rate") — not a false `1.00×`; a step from the card builds on that rate |
 | 48 | Reset to global | Click the card's `↺` | Media returns to the global rate; override marker gone |
@@ -134,12 +135,15 @@ still initializing are treated as setup and re-stamped, so a player's own
 happened and the reset button is the escape hatch. Boost capture requires the
 `activeTab` grant on the target tab (declared in the manifest; a real toolbar
 invocation grants it) — starting capture on a background tab is refused by the
-browser, which is why the control is gated to the viewed tab. A site that owns its volume UI and ignores the standard `volumechange` event is
-synchronized only where a documented player API exists (YouTube's first-party
-player, via the host-gated adapter capability) — Spotify and SoundCloud's web
-players expose no reliable public API, so on those sites the popup readout and
-element volume stay truthful while the site's own indicator keeps its own
-state; verify YouTube's menu/indicator sync by hand (#45b, #45c). The action popup's outer frame is square and
-browser-owned; the document paints the theme paper to the frame edges (no gap)
-and keeps the rounded cards/popovers inside. Verify visually with the
-extension loaded, in both themes.
+browser, which is why the control is gated to the viewed tab. A site that owns its player UI and ignores the standard `volumechange`/`ratechange`
+events is synchronized only through a feature-detected adapter: on YouTube the
+extension uses the first-party player's **internal** `#movie_player` methods
+(undocumented, not the official YouTube IFrame Player API, and changeable — the
+adapter no-ops safely when they are missing). Spotify and SoundCloud's web
+players expose no reliable public API for this, so their native UI
+synchronization is unsupported; the popup readout and element state stay
+truthful while the site keeps its own indicator. Verify YouTube's
+menu/indicator sync by hand (#45b, #45c). The action popup's outer frame is
+browser-owned and square on Chrome; the document paints the theme paper edge to
+edge (no gap) and the rounded cards/popovers are the inner surface. Verify
+visually with the extension loaded, in both themes.

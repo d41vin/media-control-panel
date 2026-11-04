@@ -2,10 +2,15 @@
 
 A Chrome extension that puts every tab playing media into one toolbar popup —
 Chrome's own Global Media Controls, but stronger: a global playback speed with
-per-page overrides, tab volume boost up to 600 %, pause everything, mute
-everything, seek, per-tab volume, Picture-in-Picture, and a keyboard command
+per-page overrides, tab volume boost up to 600 %, pause everything, mute browser
+tab audio, seek, per-tab volume, Picture-in-Picture, and a keyboard command
 surface. Built as pure HTML/CSS/JS: no framework, no build step, no webfonts,
 nothing to compile.
+
+**Release status.** v2.1, last verified in **Google Chrome 156.0.8078.76** on
+2026-11-04 (results under [Testing](#testing)). Chrome is the primary browser;
+Microsoft Edge is supported as an optional secondary target for compatibility
+checks (`MCP_BROWSER=edge` in the test rigs).
 
 Everything is local: no accounts, no analytics, no network requests, and audio
 boost processing never leaves the device. Persistent state is the pinned target
@@ -23,6 +28,12 @@ cleared on navigation or browser exit), and the active boost state
 |---|---|---|
 | ![Single media card](docs/screenshots/popup-card.png) | ![Volume popover with the two audio truths](docs/screenshots/popup-volume.png) | ![Settings panel](docs/screenshots/popup-settings.png) |
 
+The screenshots are captured from the **real toolbar action popup**
+(`chrome.action.openPopup()` in a headed Chrome window), not from `popup.html`
+in a tab. A CDP capture contains the popup's *content* surface; the bubble's
+outer frame, shadow and window decorations are drawn by the browser and are
+not part of the image.
+
 ## Features (v2.1)
 
 - **Media cards** — one rounded card per media tab: artwork (from the page's
@@ -38,7 +49,8 @@ cleared on navigation or browser exit), and the active boost state
   5 % steps, element volume, plus two labelled state rows that keep the
   browser's tab mute and the page player's own mute apart — each its own
   toggle), a per-page speed stepper, a tab boost chip, and an overflow menu
-  (pin target, switch to tab, close tab).
+  (pin target, switch to tab, close tab). The controls row reads
+  **Speed → PiP → Volume → Boost → More**, right-aligned.
 - **Global speed** — a speed bar under the header: 0.25×–16.00× in 0.25× steps,
   reset to 1.00×, persisted in `chrome.storage.local`. It is the default rate
   for media across tabs — including media that starts later, new pages, and
@@ -73,25 +85,37 @@ cleared on navigation or browser exit), and the active boost state
   while the override itself stays scoped to the tab's top-level document.
   Website-exact rates are preserved (1.10× stays 1.10×, never snapped to the
   0.25× grid).
-- **Two audio truths** — the browser's tab mute (`tab.mutedInfo`, what the
-  card speaker and Mute all control) and the page player's own mute (the
-  media element's `muted`) are independent states shown separately in the
-  volume popover ("Tab audio" / "Player audio", each row its own toggle).
-  A native player mute or volume change reaches the popup through the
-  standard `volumechange` observation (open cards track it; the volume
-  popover keeps tracking even for paused media while it is open, and fires a
-  fresh read when opened — the slider always shows the element's current
-  value, never a stale snapshot).
-- **Private-player synchronization** — players that keep their own UI state
-  ignore element writes in their interface. Where a documented player API
-  exists, an isolated adapter capability carries the element's actual state
-  into that API: on YouTube the first-party player's speed, volume and mute
-  UI follow extension changes (and a player that clamps a value — its rate
-  menu tops out at 2.00× — lands the clamped truth in the element, which the
-  popup then displays). The sync is host-gated, feature-detected,
-  compare-only, and runs in the page's MAIN world; a settled player sees
-  zero writes. Spotify and SoundCloud expose no reliable public player API,
-  so their cards stay truthful through element reads with no UI sync.
+- **Two audio truths, kept apart** —
+  **Tab audio** is the browser-level mute state (`tab.mutedInfo`, controlled
+  through `chrome.tabs.update`; the card speaker, the popover's "Tab audio"
+  row, the header's **Mute tabs** and `Alt+Shift+M` all drive it).
+  **Player audio** is the website player's own mute state: the media
+  element's `muted` for generic pages, and the YouTube player's own state
+  through its internal methods for youtube.com. The volume popover shows both
+  states side by side with their own toggles. A native player mute or volume
+  change reaches the popup through observation (open cards track it; the
+  volume popover keeps tracking even for paused media while open, and fires a
+  fresh read when opened — never a stale snapshot). Neither state can reverse
+  the other.
+- **Player-owned state synchronization (YouTube)** — two different
+  synchronization mechanisms exist, and they are not interchangeable:
+  *generic element-level* control writes the media element's `volume`/
+  `playbackRate`/`muted`, and the browser's standard `volumechange`/
+  `ratechange` events carry that to any site that listens (no adapter); and
+  *player-owned* control, needed when a player keeps its own UI/model and
+  ignores element writes. On youtube.com the adapter uses feature-detected
+  methods on the first-party player's **internal `#movie_player` interface**
+  to drive its speed, volume and mute UI, and reads the player's own mute and
+  volume state for the popup. These methods are **not the official YouTube
+  IFrame Player API** — they are undocumented internals and YouTube may
+  change them; the adapter detects their absence and falls back to the
+  element, which always works but may not move the site's own UI. The sync is
+  host-gated, compare-only and runs in the page's MAIN world; a settled
+  player sees zero writes; a player that clamps its menu (YouTube shows at
+  most 2.00×) cannot drag the actual media rate down, and the card displays
+  the element's real rate. Spotify and SoundCloud expose no reliable public
+  player API for this, so their native UI synchronization is not supported —
+  their cards stay truthful through element reads.
 - **Tab volume boost** — amplification from 100 % (unity) to 600 % in 10 %
   steps for **the tab you are viewing**, built on `chrome.tabCapture` + an
   offscreen document with a Web Audio `GainNode` and a soft limiter. The
@@ -115,8 +139,9 @@ cleared on navigation or browser exit), and the active boost state
   everything: tracks, partial nodes, an unused AudioContext, pending state,
   and the offscreen document itself when no pipeline remains (the error state
   also closes it on its auto-clear).
-- **Pause all / Mute all** in the header; Mute all flips to Unmute all
-  contextually.
+- **Pause all / Mute tabs** in the header; Mute tabs flips to Unmute tabs
+  contextually. Mute tabs only affects browser tab audio — player mute states
+  are never touched by it.
 - **Pinned target** — mark one tab (accent card border) and toggle its
   playback from the keyboard without opening the popup.
 - **Settings** — the gear opens device-local preferences: **Appearance**
@@ -131,7 +156,7 @@ cleared on navigation or browser exit), and the active boost state
 - **Keyboard commands** (remappable at `chrome://extensions/shortcuts`):
   - `Alt+Shift+Space` — play/pause the pinned target
   - `Alt+Shift+P` — pause media in every tab that has any
-  - `Alt+Shift+M` — mute all audible tabs / unmute what this extension muted
+  - `Alt+Shift+M` — mute browser tab audio everywhere audible / unmute what this extension muted
 - **Playing-count badge** — the toolbar icon shows how many tabs are making
   sound, like Chrome's own media icon.
 - **Appearance** — System follows the OS/browser; Light and Dark force the
@@ -147,9 +172,8 @@ cleared on navigation or browser exit), and the active boost state
    extension card.
 4. Optional: `npm run icons` regenerates the icon set (pure Node, no dependencies).
 
-Note on shortcuts: Chrome may leave a command unassigned if another app took the key
-(Edge, for example, claims `Alt+Shift+P`). Check `chrome://extensions/shortcuts` — every
-command is remappable there.
+Note on shortcuts: Chrome may leave a command unassigned if another app or the OS took
+the key. Check `chrome://extensions/shortcuts` — every command is remappable there.
 
 ## Try it
 
@@ -206,7 +230,32 @@ command matrix plus the speed-policy and boost state machines.
   actually allows (popup click flow, a reset → restart cycle with real mouse input, a real
   active boost across same-tab and cross-origin navigation, and a reset after navigation, then
   raw `getMediaStreamId` checks); records the outcome without asserting it.
-- `npm run shots` — regenerates the README screenshots from the real popup.
+- `npm run shots` — regenerates the README screenshots from the real action popup
+  (`chrome.action.openPopup()` in a headed window; CDP captures the popup content,
+  not the browser-owned bubble frame).
+
+### Testing
+
+Everything runs against an isolated temporary browser profile — never your normal
+browser profile. The test rigs default to Google Chrome (Edge via `MCP_BROWSER=edge`).
+
+**Last verified: Google Chrome 156.0.8078.76, 2026-11-04.**
+
+| Command | What it runs | Result |
+|---|---|---|
+| `npm test` | static checks, no browser | passed |
+| `npm run harness` | headless mock pages (background logic + popup smoke) | passed — 79 background assertions + popup mock |
+| `npm run e2e` | full end-to-end suite in real Chrome | 122/122 |
+| `npm run youtube-check` | real youtube.com in a headed Chrome window | 13/13 |
+| `npm run verify-capture` | headed probe of the capture API's activeTab behavior | records the browser's refusal (toolbar-click check remains manual) |
+
+The mock harness, the e2e suite and the real-site check cover different things:
+the harness runs the real `background.js` and `popup.js` against an in-memory
+`chrome.*` mock (no real browser extension, no network); the e2e suite loads the
+unpacked extension in real Chrome and drives the popup as an extension page; the
+YouTube check loads the extension in a headed window and verifies real-site mute,
+volume and speed behavior against youtube.com itself. The screenshot generator is
+separate again (real action popup, content-only capture).
 
 ## Why it's light
 
@@ -225,8 +274,8 @@ active** and is torn down when the last one resets.
 Detection uses `tabs.query` (audible/muted need no permission), control is
 on-demand `chrome.scripting.executeScript` only when you click something, and the
 cards' 1-second refresh runs only while a card's media is **playing**. Total
-unpacked size is about 85 KB including icons — measure with `du -sb extension`
-(the whole repository, docs and test fixtures included, is under 1 MB).
+unpacked size is about 192 KB including icons — measure with `du -sb extension`
+(the whole repository, docs, screenshots and test fixtures included, is under 2 MB).
 
 Permissions, exactly:
 
@@ -279,8 +328,9 @@ extension/
                    + YouTube private-player sync (MAIN world, host-gated, feature-detected)
   lib/settings.js  settings model shared by popup and background (chrome.storage.local)
   offscreen.html/js  audio boost pipeline: capture -> gain -> limiter -> output
-scripts/           icon generator, static checks (npm test), harness runner, E2E rig,
-                   screenshot generator
+scripts/           icon generator, static checks (npm test), browser selection
+                   helper (Chrome default, MCP_BROWSER=edge), harness runner, E2E rig,
+                   real-site YouTube check, screenshot generator
 test/              chrome mock, popup harness, background harness, media fixtures
 docs/              RESEARCH.md (why), DESIGN.md (look), PLAN.md (roadmap), CHECKLIST.md (manual pass)
 ```
@@ -306,10 +356,11 @@ is built the way it is.
   exposed to extensions).
 - Next/previous track only exists on sites with an adapter (YouTube, Spotify, SoundCloud); other
   sites expose no next/prev control an extension could drive.
-- Private-player UI sync exists only where a documented player API exists (YouTube). Spotify and
-  SoundCloud's web players keep their UI driven by private internals with no public API — on
-  those sites the popup readout and element state stay truthful while the site's own indicator
-  keeps showing its own model.
+- Native player UI synchronization is implemented only for YouTube, through the player's
+  internal (undocumented) `#movie_player` methods; it may break if YouTube changes them, and it
+  falls back to element-level control when they are absent. Spotify and SoundCloud's web players
+  expose no reliable public player API — on those sites the popup readout and element state stay
+  truthful while the site's own indicator keeps its own model.
 - `chrome://` pages can be listed and muted but not play/paused, speed-managed, or boosted —
   they are not injectable and cannot be captured.
 - The speed manager enforces the policy blindly on **playing** media; a paused element takes
@@ -342,6 +393,7 @@ is built the way it is.
   `tabCapture` works, for every extension in this category. Boost **starts** are limited to
   the viewed tab (the platform's `activeTab` rule); once started, the capture is a tab-level
   setting and continues across navigation until reset or tab close.
-- The action-popup frame is owned by the browser and is square on Chrome; CSS cannot
-  round it. The document paints the same theme colour to the frame, so there is no gap, and
-  the cards/popovers keep their rounded internal surface.
+- The action-popup's outer frame, shadow and window decorations are owned by the browser
+  (square on Chrome); CSS styles only the internal surface. The document paints the theme
+  colour edge to edge, so there is no gap, and the cards/popovers keep their rounded internal
+  surface. Screenshots capture the popup content, not the browser-owned frame.

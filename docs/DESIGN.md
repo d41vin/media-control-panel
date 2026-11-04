@@ -193,9 +193,9 @@ Boost is a **tab** setting, not a document setting.
 The popup renders mute from `tab.mutedInfo` and never invents a state. The
 quick-mute toggle reads `chrome.tabs.get` before issuing one
 `chrome.tabs.update({muted})`, then applies the resolved Tab (the same truth
-`tabs.onUpdated` carries); Mute all does the same per row, and a focus /
+`tabs.onUpdated` carries); Mute tabs does the same per row, and a focus /
 visibility return re-reads the listed tabs once. There is no extension code
-path that unmutes a tab except an explicit Mute all / shortcut action. A
+path that unmutes a tab except an explicit Mute tabs / shortcut action. A
 stale read that began before a mute command is discarded by the row's command
 timestamp, and `makeRow` reuses an existing record instead of appending a
 duplicate card, so the icon the user clicked is the icon that updates.
@@ -207,7 +207,7 @@ them. The volume popover names both, side by side, each row its own toggle:
 
 | State | Owner | Written through | Popup surface |
 |---|---|---|---|
-| Browser tab mute | Chrome (`tab.mutedInfo`) | `chrome.tabs.update({muted})` | card speaker icon, popover "Tab audio" row, Mute all, Alt+Shift+M |
+| Browser tab mute | Chrome (`tab.mutedInfo`) | `chrome.tabs.update({muted})` | card speaker icon, popover "Tab audio" row, Mute tabs, Alt+Shift+M |
 | Native player mute | the SITE PLAYER's own model when it exposes one (`#movie_player.isMuted/mute/unMute`), else the element (`muted`) | `setMuted` (MAIN world, player API) / `pageSetMuted` (element fallback) | popover "Player audio" row |
 | Normal volume | the media element (`volume`) | element write (`pageSetVolume`) | popover slider + readout |
 | Tab boost | the capture pipeline | offscreen gain node | boost chip + popover |
@@ -220,9 +220,12 @@ them. The volume popover names both, side by side, each row its own toggle:
   button, volume slider or rate menu) reaches the popup through observation:
   the ping loop of an open card carries the primary element's `muted` and
   `volume`, and the volume popover keeps that loop alive even for PAUSED
-  media while it is open. Opening the popover fires one fresh ping, so the
-  slider shows the element's current truth — never the snapshot from when
-  the popup or probe was new, and never a jump-back from an older probe.
+  media while it is open. On a player with an internal state model (YouTube),
+  the same ping also asks the adapter for the player's own `isMuted()` and
+  uses that for the "Player audio" row — a player whose UI updates the element
+  lazily still shows its true state. Opening the popover fires one fresh ping,
+  so the slider shows the element's current truth — never the snapshot from
+  when the popup or probe was new, and never a jump-back from an older probe.
 - **M3 (extension → site, generic).** Extension writes land on the element;
   the standard `volumechange`/`ratechange` events carry them to any site
   that listens (`test/volume-sync.html` proves it with no adapter). The
@@ -269,9 +272,10 @@ in `storage.local` `settings`. The popup sets `data-theme` on `<html>`:
 `system` leaves the `prefers-color-scheme` media query in charge, while
 `light`/`dark` override the token block. Every card, popover, switch, range
 control and disabled state reads the same tokens, so one attribute repaints
-the whole surface. The document's own background is the theme paper, filling
-the browser-owned square popup frame; the rounded stage/cards are the inner
-surface.
+the whole surface. The document's own background is the theme paper, painted
+edge to edge so no gap shows around the browser-owned popup frame; the
+cards/popovers are the rounded inner surfaces. The frame's own shape and
+shadow belong to the browser and are not styled by the extension.
 
 ## Computational rules for controls
 
@@ -301,10 +305,10 @@ surface.
    waved speaker, boost is speaker-with-plus (never a download arrow), the
    global speed bar carries a gauge, and ±10 s are circular arrows carrying
    the 10 — never confusable with prev/next track.
-4. **Flat, softly.** Zero shadows, zero gradients, a rounded 14 px stage (the
-   popup body itself — Chromium paints the action bubble from the document, so
-   the corners are real) and 12 px cards on 1 px hairlines, 6–9 px control
-   radii. Depth comes from hierarchy, not elevation.
+4. **Flat, softly.** Zero shadows, zero gradients, 12 px cards on 1 px
+   hairlines, 6–9 px control radii. The popup document fills the browser-owned
+   bubble edge to edge in the theme paper (the outer frame and its corners are
+   Chromium's, not ours). Depth comes from hierarchy, not elevation.
 5. **Fast is a feature.** System Helvetica stack — no font downloads. Native
    `title` tooltips — no tooltip JS. CSS transitions under 150 ms, all disabled
    under `prefers-reduced-motion`.
@@ -363,25 +367,29 @@ dirs, just the pattern:
 ## Anatomy
 
 ```
-╭────────────────────────────────────────────────╮
-│ MEDIA CONTROL ·2          PAUSE ALL  MUTE ALL ⚙ │  44 px header
+┌────────────────────────────────────────────────┐
+│ MEDIA CONTROL ·2      PAUSE ALL  MUTE TABS  ⚙  │  44 px header
 ├────────────────────────────────────────────────┤
-│ ◔ SPEED                      [−] 1.00× [+] [↺] │  38 px global speed bar
+│ ◔ GLOBAL SPEED               [−] 1.00× [+] [↺] │  38 px global speed bar
 ├────────────────────────────────────────────────┤
 │ ┌────────────────────────────────────────────┐ │
 │ │ [art]  Video Title …               🔇  [ ▶ ]│ │  card head
 │ │        SITE.COM · ×6                       │ │
 │ │ ⏮ ↺10 ────●──────── 0:12 / 3:45 ─── ↻10 ⏭  │ │  timeline row
-│ │ [PIP]      − 1.00× + ↺   🔊  ↑ 100 %   ⋯    │ │  controls row
+│ │    − 1.00× + ↺  PIP  🔊  ↑ 100 %  ⋯        │ │  controls row
 │ │    └ popover: VOLUME ────●──  80 %          │ │  inline, on demand
 │ └────────────────────────────────────────────┘ │
 │ ┌────────────────────────────────────────────┐ │
 │ │ [art]  Song Title …                 [ ▶ ]  │ │
 │ └────────────────────────────────────────────┘ │
 ├────────────────────────────────────────────────┤
-│ ⇧⌥P PAUSE ALL · ⇧⌥M MUTE ALL        TARGET NONE │  32 px footer
-╰────────────────────────────────────────────────╯
+│ ⇧⌥P PAUSE ALL · ⇧⌥M MUTE TABS      TARGET NONE │  32 px footer
+└────────────────────────────────────────────────┘
 ```
+
+The outer frame above is square because the browser owns it: Chromium draws the
+action bubble's frame, shadow and decorations. The document paints the theme
+colour edge to edge; the rounded surfaces are the cards and popovers inside.
 
 - **Art** (40 px, 6 px radius): mediaSession artwork when the page provides
   it, favicon otherwise, letter tile (first character of the host) as the
@@ -395,12 +403,13 @@ dirs, just the pattern:
   unsupported ones disable (adapter missing, site button gone or disabled,
   live streams can't seek) rather than vanish or no-op. Live streams replace
   the slider + times with the red `LIVE` tag and the row gets `.live`.
-- **Controls row**: PiP (only when the primary element is video), then
-  right-aligned: the per-page speed stepper (`− 1.00× +`, `↺` reset appears
-  only while overridden — the value gets the accent + dotted underline then),
-  the volume button (opens the popover), the boost chip (icon + percentage,
-  accent while active), and the overflow menu (pin target, switch to tab,
-  close tab — each with its glyph; close is destructive red).
+- **Controls row**: one right-aligned group reading
+  **Speed → PiP → Volume → Boost → More**: the per-page speed stepper
+  (`− 1.00× +`, `↺` reset appears only while overridden — the value gets the
+  accent + dotted underline then), PiP (only when the primary element is
+  video), the volume button (opens the popover), the boost chip (icon +
+  percentage, accent while active), and the overflow menu (pin target, switch
+  to tab, close tab — each with its glyph; close is destructive red).
 - **Popovers** are inline collapsible sections inside the card, not floating
   layers: they cannot clip, overlap, or escape the popup. One open at a time
   across all cards; click-away and `Esc` close.
