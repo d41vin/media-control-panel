@@ -25,6 +25,8 @@ and reopen the popup (stale assets are the #1 "it's broken" cause).
 | 9 | Volume popover | Click the speaker icon, drag the slider | Element volume follows in 5 % steps; popover readout matches the value; closing and reopening shows the real value (a fresh read, no stale snapshot); a site that listens to `volumechange` (fixture `test/volume-sync.html`) moves its own indicator |
 | 9b | Two audio truths | Open the volume popover and look at the two state rows | `TAB AUDIO` shows the browser tab mute, `PLAYER AUDIO` shows the page player's own mute — they can disagree; each row toggles only its own state (the player row writes the element, never the tab) |
 | 9c | Native player mute recognized | Mute the player on the site itself (its own button) | The popover's `PLAYER AUDIO` row flips to `Muted` (accent) within a second while the card is open; `TAB AUDIO` stays `Unmuted` |
+| 9d | Player mute survives the site | On YouTube, click `PLAYER AUDIO` once to mute, then switch away and back to the tab; wait a few seconds | It stays muted (the player's own API is the mute channel — the site cannot reassert it back to unmuted). Unmute from the popover restores sound even after the site muted itself first |
+| 9e | Real-site mute matrix | `npm run youtube-check` (needs internet) | `13/13 real-site checks passed`: extension mute/unmute on the active and backgrounded tab, native mute reflected in the popover, extension unmute overriding a native mute, tab mute independence, and actual playback at 2× / 2.5× / 4× / 8× / 16× |
 | 10 | LIVE | Open a live stream | Seek slider replaced by red `LIVE` tag; ±10 s disabled |
 | 11 | Multi-element | Fixture page (`npm run serve` → `localhost:8080/test/media-page.html`) | Site line shows `· ×N`; controls target the playing element |
 | 12 | Switch tab | Click a card title (or the menu's `Switch to tab`) | Jumps to that tab and focuses its window |
@@ -56,7 +58,8 @@ and reopen the popup (stale assets are the #1 "it's broken" cause).
 
 | # | Feature | How to test | Expected |
 |---|---|---|---|
-| 36 | Global bar | Look under the header | `SPEED − 1.00× + ↺`; reset disabled at 1.00×; `−`/`+` disabled at 0.25× / 4.00× |
+| 36 | Global bar | Look under the header | `SPEED − 1.00× + ↺`; reset disabled at 1.00×; `−`/`+` disabled at 0.25× / 16.00× |
+| 36b | High-speed range | Set 2×, 4×, 8×, 16× (global or per card) on a video | Playback really runs at the requested rate (watch the video speed, not just the readout); the card shows the actual element rate. YouTube's own speed menu may still display 2× — that is its menu cap, not the playback rate |
 | 37 | Global stepping | Click `+` twice | `1.50×`; playing media in every inheriting tab speeds up within a second |
 | 38 | Global persistence | Set 1.50×, restart the browser, reopen | Bar shows `1.50×`; new media starts at 1.50× |
 | 39 | Applies to new media | Start a paused video with global at 1.50× | It plays at 1.50× from the start |

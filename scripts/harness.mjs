@@ -193,8 +193,19 @@ async function main() {
     });
     const pmSession = (await cdp.send('Target.attachToTarget', { targetId: pm.targetId, flatten: true })).sessionId;
     await cdp.send('Runtime.enable', {}, pmSession);
-    await sleep(2500); // rows, probes, fake background traffic
+    // rows, probes and fake background traffic settle asynchronously; poll for
+    // the first row instead of a fixed sleep (init time varies with machine
+    // load, and the interactions below assume a row exists)
+    const pmReady = await waitFor(
+      () => evalIn(cdp, pmSession, `document.querySelectorAll('.row').length >= 1`),
+      15000,
+    ).catch(() => false);
+    await sleep(600); // probes + first ping pass
     const pmRows = await evalIn(cdp, pmSession, `document.querySelectorAll('.row').length`);
+    if (!pmReady || pmRows < 1) {
+      console.error('FAIL  popup-mock never produced a row');
+      failed = true;
+    }
     // exercise the visible interactions once: global speed + a card stepper
     const pmState = await evalIn(
       cdp,

@@ -1198,13 +1198,14 @@ async function main() {
     await waitFor(() => evalIn(cdp, volSyncSession, `Math.abs(mcpVolume.audio.playbackRate - 1) < 0.01`));
 
     // 1) element writes leave the private-player UI stale; the adapter sync
-    //    carries the element truth into the player API and the UI follows
+    //    carries the element truth into the player API for rate and volume
+    //    (the channels where the element is authoritative)
     const sync1 = await evalIn(
       cdp,
       psSession,
       `(async () => {
          const { ADAPTERS } = await import('/extension/lib/adapters.js');
-         mcpPS.el.playbackRate = 1.5; mcpPS.el.volume = 0.4; mcpPS.el.muted = true;
+         mcpPS.el.playbackRate = 1.5; mcpPS.el.volume = 0.4;
          const before = { ui: mcpPS.ui(), elRate: mcpPS.el.playbackRate };
          const res = ADAPTERS.youtube.syncPlayer();
          return { before, res, after: mcpPS.ui(), state: mcpPS.state() };
@@ -1214,15 +1215,69 @@ async function main() {
     sync1?.before?.ui?.rate === '1.00×' && Math.abs(sync1.before.elRate - 1.5) < 0.001
       ? ok('private-player site UI ignores direct element writes (stale before the sync)')
       : bad('private-player site UI ignores direct element writes (stale before the sync)', JSON.stringify(sync1?.before));
-    sync1?.after?.rate === '1.50×' && sync1.after.volume === '40%' && sync1.after.mute === 'on' &&
-    Math.abs(sync1?.state?.apiRate - 1.5) < 0.001 && sync1?.state?.apiMuted === true
-      ? ok('adapter syncPlayer carries element truth into the player API (speed, volume, mute)')
-      : bad('adapter syncPlayer carries element truth into the player API (speed, volume, mute)', JSON.stringify(sync1));
+    sync1?.after?.rate === '1.50×' && sync1.after.volume === '40%' &&
+    Math.abs(sync1?.state?.apiRate - 1.5) < 0.001 && Math.abs(sync1?.state?.apiVolume - 40) < 0.001
+      ? ok('adapter syncPlayer carries element rate/volume into the player API')
+      : bad('adapter syncPlayer carries element rate/volume into the player API', JSON.stringify(sync1));
 
-    // 2) the player API may clamp (YouTube's rate menu): the element holds the
-    //    clamped truth, a ratechange reports it, and the card shows reality.
-    //    ratechange dispatches in a QUEUED task — sampled after a tick, not
-    //    synchronously inside the same eval.
+    // 1b) MUTE runs the other way: the player owns its mute model and a build
+    //     that reasserts it over element writes must not lose the command (the
+    //     reported YouTube failure). A raw element write is reverted; the
+    //     adapter's setMuted goes through the player API and sticks, with the
+    //     element aligned to it.
+    const rawMute = await evalIn(
+      cdp,
+      psSession,
+      `(async () => {
+         mcpPS.el.muted = true;
+         await new Promise((r) => setTimeout(r, 80)); // the player's reassertion task
+         return { elMuted: mcpPS.el.muted, apiMuted: mcpPS.player.isMuted() };
+       })()`,
+      true,
+    );
+    rawMute?.apiMuted === false && rawMute?.elMuted === false
+      ? ok('element-first mute is reverted by a reasserting player (the reported failure, reproduced)')
+      : bad('element-first mute is reverted by a reasserting player (the reported failure, reproduced)', JSON.stringify(rawMute));
+    const apiMute = await evalIn(
+      cdp,
+      psSession,
+      `(async () => {
+         const { ADAPTERS } = await import('/extension/lib/adapters.js');
+         const res = ADAPTERS.youtube.setMuted({ muted: true });
+         await new Promise((r) => setTimeout(r, 120)); // reassertion would run now
+         return { res, elMuted: mcpPS.el.muted, apiMuted: mcpPS.player.isMuted() };
+       })()`,
+      true,
+    );
+    apiMute?.res?.found === true && apiMute?.res?.muted === true && apiMute?.elMuted === true && apiMute?.apiMuted === true
+      ? ok('adapter setMuted goes through the player API and survives reassertion (element aligned)')
+      : bad('adapter setMuted goes through the player API and survives reassertion (element aligned)', JSON.stringify(apiMute));
+
+    // 1c) native player mute/unmute is readable from the player itself, and
+    //     the extension API can override a native choice both ways
+    const nativeMute = await evalIn(
+      cdp,
+      psSession,
+      `(async () => {
+         const { ADAPTERS } = await import('/extension/lib/adapters.js');
+         mcpPS.player.mute(); // the site's own control
+         const readMuted = ADAPTERS.youtube.readState();
+         mcpPS.player.unMute();
+         const readUnmuted = ADAPTERS.youtube.readState();
+         const st = ADAPTERS.youtube.setMuted({ muted: false });
+         return { readMuted, readUnmuted, st, elMuted: mcpPS.el.muted, apiMuted: mcpPS.player.isMuted() };
+       })()`,
+      true,
+    );
+    nativeMute?.readMuted?.muted === true && nativeMute?.readUnmuted?.muted === false &&
+    nativeMute?.st?.found === true && nativeMute?.elMuted === false && nativeMute?.apiMuted === false
+      ? ok('native mute is readable via the player state, and extension unmute overrides it')
+      : bad('native mute is readable via the player state, and extension unmute overrides it', JSON.stringify(nativeMute));
+
+    // 2) a player whose menu clamps (YouTube shows at most 2.00x) must not
+    //    drag the ACTUAL playback below the requested rate: the sync restores
+    //    the element and remembers what it reconciled, so it never re-fights.
+    //    ratechange dispatches in a QUEUED task — sampled after a tick.
     const sync2 = await evalIn(
       cdp,
       psSession,
@@ -1237,21 +1292,22 @@ async function main() {
     );
     await sleep(400); // let the queued ratechange tasks dispatch
     const rateEventsAfter = await evalIn(cdp, psSession, `mcpPS.events().ratechange`, true);
-    Math.abs(sync2?.state?.rate - 2) < 0.001 && sync2?.ui?.rate === '2.00×' && rateEventsAfter > sync2.evs
-      ? ok('player-API clamping lands in the element and fires ratechange (truth preserved)')
-      : bad('player-API clamping lands in the element and fires ratechange (truth preserved)', JSON.stringify({ sync2, rateEventsAfter }));
+    Math.abs(sync2?.state?.rate - 2.5) < 0.001 && Math.abs(sync2?.state?.apiRate - 2) < 0.001 &&
+    sync2?.ui?.rate === '2.00×' && rateEventsAfter > sync2.evs
+      ? ok('a clamping player menu cannot drag the media element down (element 2.50×, menu 2.00×)')
+      : bad('a clamping player menu cannot drag the media element down (element 2.50×, menu 2.00×)', JSON.stringify({ sync2, rateEventsAfter }));
     // open the volume popover: its open fires a fresh ping (togglePopover),
     // so the card readout lands deterministically instead of whenever the
     // 1 s ping cadence happens to run
     await evalIn(cdp, popupSession2, `(${psRow}).querySelector('.vol-btn').click()`);
     const psShown = await waitFor(
-      () => evalIn(cdp, popupSession2, `(${psRow}).querySelector('.rate-readout').textContent === '2.00×'`),
+      () => evalIn(cdp, popupSession2, `(${psRow}).querySelector('.rate-readout').textContent === '2.50×'`),
       15000,
     ).catch(() => null);
     psShown
-      ? ok('the card shows the clamped actual rate (2.00×), never the requested 2.50×')
+      ? ok('the card shows the actual playback rate (2.50×), not the site menu’s 2.00×')
       : bad(
-          'the card shows the clamped actual rate (2.00×), never the requested 2.50×',
+          'the card shows the actual playback rate (2.50×), not the site menu’s 2.00×',
           JSON.stringify({
             shown: await evalIn(cdp, popupSession2, `[...document.querySelectorAll('.row')].map(r => ({ t: r.querySelector('.t-title').textContent.slice(0, 14), rate: r.querySelector('.rate-readout').textContent }))`),
             psState: await evalIn(cdp, psSession, `mcpPS.state()`, true),

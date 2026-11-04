@@ -129,6 +129,21 @@
     }
     render();
 
+    // Reassertion, as the YouTube first-party player does on some builds:
+    // an element-level mute change it did not make is overwritten from its
+    // internal model (on the next task), and the same reassertion also plays
+    // on tab activation. This is what makes element-first mute writes lose —
+    // the exact reported failure — so the sync must use the API channel.
+    const reassert = () => {
+      if (el.muted !== pMuted) el.muted = pMuted;
+    };
+    el.addEventListener('volumechange', () => {
+      if (el.muted !== pMuted) setTimeout(reassert, 0);
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) reassert();
+    });
+
     // site's own controls go through the API, like a real site's UI would
     for (const btn of document.querySelectorAll('[data-ps-rate]')) {
       btn.addEventListener('click', () => playerEl.setPlaybackRate(parseFloat(btn.dataset.psRate)));

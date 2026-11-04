@@ -11,6 +11,7 @@
     "harness": "node scripts/harness.mjs",
     "shots": "node scripts/screenshot.mjs",
     "verify-capture": "node scripts/verify-capture.mjs",
-    "e2e": "node scripts/e2e.mjs"
+    "e2e": "node scripts/e2e.mjs",
+    "youtube-check": "node scripts/youtube-check.mjs"
   }
 }

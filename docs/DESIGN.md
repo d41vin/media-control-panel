@@ -208,7 +208,7 @@ them. The volume popover names both, side by side, each row its own toggle:
 | State | Owner | Written through | Popup surface |
 |---|---|---|---|
 | Browser tab mute | Chrome (`tab.mutedInfo`) | `chrome.tabs.update({muted})` | card speaker icon, popover "Tab audio" row, Mute all, Alt+Shift+M |
-| Native player mute | the media element (`muted`) / supported player API | element write (`pageSetMuted`) | popover "Player audio" row |
+| Native player mute | the SITE PLAYER's own model when it exposes one (`#movie_player.isMuted/mute/unMute`), else the element (`muted`) | `setMuted` (MAIN world, player API) / `pageSetMuted` (element fallback) | popover "Player audio" row |
 | Normal volume | the media element (`volume`) | element write (`pageSetVolume`) | popover slider + readout |
 | Tab boost | the capture pipeline | offscreen gain node | boost chip + popover |
 
@@ -230,23 +230,36 @@ them. The volume popover names both, side by side, each row its own toggle:
   clamps is corrected by the confirmation ping.
 - **Y1 (private players).** A player that keeps its own UI state — YouTube's
   first-party player is the reported case — ignores element writes in its
-  UI. It is synchronized through its documented API surface (`#movie_player`,
-  the method names the official IFrame Player API exposes) by an isolated
-  adapter capability: `syncPlayer`, MAIN world (the API lives on page-world
-  objects the isolated world cannot see), host-gated to known hosts,
-  feature-detected, compare-only. It carries ELEMENT truth → API → site UI,
-  never the reverse; the API's own writes reach the element and are observed
-  through the standard events. If the API clamps (YouTube's rate menu tops
-  out at 2.00×), the element holds the clamped value, `ratechange` reports
-  it and R5 adopts it — the popup displays the actual observed rate, not the
-  request.
+  UI, and some builds actively REASSERT their internal mute model over
+  element writes (sometimes only on tab activation). It is synchronized
+  through its documented API surface (`#movie_player`, the method names the
+  official IFrame Player API exposes) by adapter capabilities that run in
+  the MAIN world (the API lives on page-world objects the isolated world
+  cannot see), host-gated to known hosts and feature-detected:
+  - `syncPlayer` — the direction is per channel, because ownership is per
+    channel. **Rate/volume: ELEMENT → API** (the manager/slider write the
+    element; the site UI follows its own model). **Mute: PLAYER → ELEMENT**
+    (the player's model is the site's own truth; the element is aligned to
+    it, never the other way — element-first mute writes lose on reasserting
+    builds, the reported failure). A clamping rate menu may not drag the
+    media down: the element's actual rate is restored, and a per-element
+    marker prevents re-fighting the same reconciliation.
+  - `setMuted` — the player API is the only mute channel that sticks on a
+    reasserting player: `p.mute()/p.unMute()`, then the ACTUAL `isMuted()`
+    is read back and adopted by the popup (commands are idempotent and
+    reconciled, never optimistic-only).
+  - `readState` — the popup's ping reads the player's own `isMuted()` so the
+    "Player audio" row follows native site mute even on builds whose UI
+    updates the element lazily; `null` (no player surface) falls back to the
+    element.
 - **Y2 (when syncs fire).** After every speed apply on an adapter-host tab
-  (background), and after every popup-initiated volume/player-mute write
+  (background), and after every popup-initiated volume/player-mute command
   there, exactly one `syncPlayer` runs. A settled player sees zero writes —
-  idempotence is asserted in the E2E rig. Sites without a reliable public
-  player API (Spotify, SoundCloud web players) declare no sync capability:
-  element truth stays the display source, and next/prev remains their only
-  adapter surface.
+  idempotence is asserted in the E2E rig (reassertion, reverted element
+  writes and both sync directions are covered there too). Sites without a
+  reliable public player API (Spotify, SoundCloud web players) declare no
+  sync capability: element truth stays the display source, player mute is
+  the element's `muted`, and next/prev remains their only adapter surface.
 
 ## Appearance
 
@@ -392,7 +405,10 @@ dirs, just the pattern:
   across all cards; click-away and `Esc` close.
 - **Global speed bar** under the header: label, override note (`1 PAGE
   OVERRIDE` when any exist), stepper cluster with reset. Disabled states at
-  0.25× / 4.00× / 1.00× (reset is pointless at the default).
+  0.25× / 16.00× / 1.00× (reset is pointless at the default). Speeds above
+  a site player's own menu cap still play — YouTube's menu stops at 2.00×
+  while the media runs at up to 16×; the card always shows the element's
+  actual rate.
 - **Settings panel**: unchanged pattern — three rows (label + one-line
   description + sharp square-knob switch), footed by "Settings are stored on
   this device only". `Esc` closes; `inert` while closed.

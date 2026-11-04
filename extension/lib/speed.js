@@ -24,7 +24,7 @@
 //      the 0.25× grid applies only to extension-initiated adjustments.
 
 export const SPEED_MIN = 0.25;
-export const SPEED_MAX = 4;
+export const SPEED_MAX = 16; // Chromium's media ceiling; 0.25x steps to it
 export const SPEED_STEP = 0.25;
 export const SPEED_DEFAULT = 1;
 

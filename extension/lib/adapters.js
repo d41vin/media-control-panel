@@ -66,10 +66,25 @@ function scPrev() {
 }
 
 /**
- * MAIN world. Aligns #movie_player's private state with the element truth:
- * element → API, never the other way (the API's own writes reach the element
- * itself and are observed through the standard events). Reads the player's
- * post-sync state back so callers can diagnose what the site supports.
+ * MAIN world. Squaring the player's private state with the media element.
+ *
+ * Direction per channel matters, and the reported YouTube behavior proves it:
+ *
+ *   - rate / volume: ELEMENT → player API. The manager and the volume slider
+ *     write the element; the site's UI only follows when its own model is
+ *     updated, so the element truth is pushed in. The rate push is made
+ *     harmless: if the player's menu clamps the element back down (some builds
+ *     drag the media to their advertised maximum), the element's actual rate
+ *     is restored, and a per-element marker stops the next sync from
+ *     re-entering the same fight.
+ *   - mute: PLAYER → element. The player owns its mute model; builds that
+ *     ignore element writes (or reassert their own state over them, sometimes
+ *     only on tab activation) are exactly the failure reports. The player's
+ *     API is the site's own mute mechanism, so its state is the truth and the
+ *     element is aligned to it — never the other way.
+ *
+ * Idempotent by construction: every branch compares first and writes only a
+ * real difference, so repeated syncs are no-ops.
  */
 function ytSyncPlayer() {
   let p = null;
@@ -103,15 +118,24 @@ function ytSyncPlayer() {
   try {
     if (caps.rate) {
       const want = el.playbackRate;
-      if (Number.isFinite(want) && !near(want, p.getPlaybackRate())) p.setPlaybackRate(want);
+      // __mcpPlayerRate: the last rate this sync reconciled. Without it a
+      // player that clamps its element would be re-fought on every call.
+      if (Number.isFinite(want) && !near(want, p.getPlaybackRate()) && el.__mcpPlayerRate !== want) {
+        p.setPlaybackRate(want);
+        // the player's menu may refuse the value; the media element's actual
+        // playback is what matters, so put it back if the call dragged it
+        if (!near(el.playbackRate, want)) el.playbackRate = want;
+        el.__mcpPlayerRate = want;
+      }
     }
     if (caps.volume) {
       const want = Math.round(el.volume * 100);
       if (Number.isFinite(want) && want !== Math.round(p.getVolume())) p.setVolume(want);
     }
     if (caps.mute) {
-      const want = !!el.muted;
-      if (want !== !!p.isMuted()) want ? p.mute() : p.unMute();
+      // the player's model is authoritative for mute; align the element TO it
+      const want = !!p.isMuted();
+      if (want !== !!el.muted) want ? p.mute() : p.unMute();
     }
   } catch {
     // a wrapped or mid-upgrade player refuses: element-level control holds
@@ -125,15 +149,71 @@ function ytSyncPlayer() {
   return out;
 }
 
+/**
+ * MAIN world. Set the player's mute through its OWN API — the only channel a
+ * player that reasserts its internal state actually obeys. Reads back what
+ * the player reports so the popup renders the real state, not the request.
+ */
+function ytSetMuted(input) {
+  const want = !!input?.muted;
+  const p = document.getElementById('movie_player');
+  if (
+    !p ||
+    typeof p.isMuted !== 'function' ||
+    typeof p.mute !== 'function' ||
+    typeof p.unMute !== 'function'
+  ) {
+    return { found: false, acted: false };
+  }
+  try {
+    if (!!p.isMuted() !== want) want ? p.mute() : p.unMute();
+  } catch {
+    return { found: true, acted: false };
+  }
+  let el = null;
+  try {
+    el = p.querySelector('video, audio') || document.querySelector('video, audio');
+  } catch {}
+  return {
+    found: true,
+    acted: true,
+    muted: !!p.isMuted(),
+    elMuted: el ? !!el.muted : null,
+  };
+}
+
+/**
+ * MAIN world. The player's own state, read-only — the popup's "Player audio"
+ * row must show what the site's player believes, even on builds whose UI does
+ * not reflect it in the media element promptly.
+ */
+function ytPlayerState() {
+  const p = document.getElementById('movie_player');
+  if (!p) return { found: false };
+  const out = { found: true };
+  try {
+    if (typeof p.isMuted === 'function') out.muted = !!p.isMuted();
+  } catch {}
+  try {
+    if (typeof p.getVolume === 'function') out.volume = p.getVolume();
+  } catch {}
+  try {
+    if (typeof p.getPlaybackRate === 'function') out.rate = p.getPlaybackRate();
+  } catch {}
+  return out;
+}
+
 export const ADAPTERS = {
   youtube: {
     hosts: ['youtube.com', 'youtube-nocookie.com'],
-    caps: ['next', 'prev', 'speed-sync', 'volume-sync', 'mute-sync'],
+    caps: ['next', 'prev', 'speed-sync', 'volume-sync', 'mute-sync', 'mute-api', 'read-state'],
     next: ytNext,
     prev: ytPrev,
     nextSel: '.ytp-next-button',
     prevSel: '.ytp-prev-button',
     syncPlayer: ytSyncPlayer,
+    setMuted: ytSetMuted,
+    readState: ytPlayerState,
   },
   spotify: {
     hosts: ['spotify.com'],
@@ -176,6 +256,8 @@ export function adapterFor(url) {
           nextSel: adapter.nextSel,
           prevSel: adapter.prevSel,
           syncPlayer: adapter.syncPlayer ?? null,
+          setMuted: adapter.setMuted ?? null,
+          readState: adapter.readState ?? null,
         };
       }
     }

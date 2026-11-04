@@ -1066,12 +1066,15 @@ function syncCard(rec) {
 
   // the volume popover's two audio truths, rendered like every other
   // readout (not user-dragged values): tab mute is the browser's, player
-  // mute is the primary element's. They are independent and can disagree.
+  // mute is the SITE PLAYER's own state when it exposes one (a player that
+  // reasserts its model makes the element a lagging copy), falling back to
+  // the element. They are independent and can disagree.
   const tabMuted = !!rec.tab.mutedInfo?.muted;
   n.tabAudioBtn.querySelector('.vs-value').textContent = tabMuted ? 'Muted' : 'Unmuted';
   n.tabAudioBtn.classList.toggle('is-muted', tabMuted);
   n.tabAudioBtn.setAttribute('aria-label', tabMuted ? 'Unmute tab audio' : 'Mute tab audio');
-  const playerMuted = element ? !!element.muted : null;
+  const playerMuted =
+    rec.playerMuted ?? (element ? !!element.muted : null);
   n.playerAudioBtn.querySelector('.vs-value').textContent =
     playerMuted === null ? '—' : playerMuted ? 'Muted' : 'Unmuted';
   n.playerAudioBtn.classList.toggle('is-muted', playerMuted === true);
@@ -1179,6 +1182,16 @@ async function pingNow(rec) {
       p.element.volume = state.volume;
       p.element.muted = !!state.muted;
       p.element.rate = state.rate;
+    }
+    // private players own their mute model: read it from the player itself
+    // so the "Player audio" row follows the site even when its UI builds
+    // update the element lazily (or reassert their state on activation)
+    if (rec.adapter?.readState) {
+      const ps = await execMain(rec, rec.adapter.readState, {});
+      if (rows.get(rec.tab.id) === rec && ps) {
+        // a page without the player surface: the element is the truth
+        rec.playerMuted = typeof ps.muted === 'boolean' ? ps.muted : null;
+      }
     }
     if (state.siteButtons) rec.adapterState = state.siteButtons;
     // a ping captured before the newest command landed — or while a command
@@ -1456,13 +1469,50 @@ async function togglePlayerMute(rec) {
   if (!rec?.probe) return;
   const element = primaryOfProbe(rec.probe)?.element;
   if (!element) return;
-  const target = !element.muted;
-  element.muted = target; // optimistic; the confirmation ping is the truth
+  // toggle from the player's truth when one is known: a player build that
+  // reasserts its own model makes the element a lagging copy
+  const target = !(rec.playerMuted ?? element.muted);
+  const viaApi = !!rec.adapter?.setMuted;
+  if (viaApi) {
+    rec.playerMuted = target; // optimistic player truth; the page read confirms
+  } else {
+    // the element is the only mute channel there is — write it directly
+    rec.playerMuted = null;
+    element.muted = target;
+  }
   updateRow(rec);
-  await exec(rec, pageSetMuted, { muted: target });
-  // private players need the API channel to update their own mute UI
-  await syncSitePlayer(rec);
+  if (viaApi) {
+    const res = await execMain(rec, rec.adapter.setMuted, { muted: target });
+    if (res?.found && typeof res.muted === 'boolean') {
+      // the player accepted (or refused) the command itself — adopt its answer
+      rec.playerMuted = res.muted;
+    } else {
+      // the player surface vanished mid-command: fall back to the element
+      rec.playerMuted = null;
+      await exec(rec, pageSetMuted, { muted: target });
+    }
+    // align whatever the player did across its model and the element
+    await syncSitePlayer(rec);
+  } else {
+    await exec(rec, pageSetMuted, { muted: target });
+  }
   setTimeout(() => void pingNow(rec), 120);
+}
+
+/** MAIN-world injection into the primary frame (page-JS player APIs). */
+async function execMain(rec, func, args) {
+  if (!rec?.probe || typeof func !== 'function') return null;
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: rec.tab.id, frameIds: [rec.probe.primaryFrameId] },
+      world: 'MAIN',
+      func,
+      args: [args],
+    });
+    return results[0]?.result ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -1537,6 +1587,9 @@ function renderTheme() {
 /** Land a probe result on a record: primary truth + pip state, then render. */
 function applyProbe(rec, probe) {
   rec.probe = probe;
+  // a new probe means a new document/media view: the previous player-state
+  // read must not leak into this one
+  rec.playerMuted = null;
   if (probe?.siteButtons) rec.adapterState = probe.siteButtons;
   const primary = probe ? primaryOfProbe(probe) : null;
   // A probe captured before the newest command landed is stale: the command's

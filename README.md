@@ -17,7 +17,11 @@ cleared on navigation or browser exit), and the active boost state
 
 | Light | Dark |
 |---|---|
-| ![Light theme with the volume popover open](docs/screenshots/popup-light.png) | ![Dark theme media cards](docs/screenshots/popup-dark.png) |
+| ![Light theme, two media cards](docs/screenshots/popup-light.png) | ![Dark theme, two media cards](docs/screenshots/popup-dark.png) |
+
+| One card | Volume popover (Tab audio / Player audio) | Settings |
+|---|---|---|
+| ![Single media card](docs/screenshots/popup-card.png) | ![Volume popover with the two audio truths](docs/screenshots/popup-volume.png) | ![Settings panel](docs/screenshots/popup-settings.png) |
 
 ## Features (v2.1)
 
@@ -35,7 +39,7 @@ cleared on navigation or browser exit), and the active boost state
   browser's tab mute and the page player's own mute apart — each its own
   toggle), a per-page speed stepper, a tab boost chip, and an overflow menu
   (pin target, switch to tab, close tab).
-- **Global speed** — a speed bar under the header: 0.25×–4.00× in 0.25× steps,
+- **Global speed** — a speed bar under the header: 0.25×–16.00× in 0.25× steps,
   reset to 1.00×, persisted in `chrome.storage.local`. It is the default rate
   for media across tabs — including media that starts later, new pages, and
   dynamically inserted elements. While a policy is active, the (idempotent,
@@ -169,9 +173,13 @@ command matrix plus the speed-policy and boost state machines.
   tab-close cleanup) plus a popup pass that checks all three appearance options,
   the 5 %/10 % slider steps, a 3.3 s quick-mute stability window, the volume popover's two
   independent audio truths, and the player-API sync wiring.
+- `npm run youtube-check` — real-site verification on youtube.com in a headed Edge window with
+  the extension loaded (needs internet): the full mute matrix (extension/native, active/background,
+  activation, popup reopen), tab-vs-player independence, and actual playback at 2× / 2.5× / 4× /
+  8× / 16× (the media element's real rate, not the site menu's cap).
 - `npm run e2e` — launches a real Chromium browser (Edge via CDP — branded Chrome 137+ ignores
   `--load-extension`) with the unpacked extension loaded, opens the popup as an extension page,
-  and drives 119 end-to-end assertions: detection, titles, play/pause/resume, exclusive playback,
+  and drives 122 end-to-end assertions: detection, titles, play/pause/resume, exclusive playback,
   seek, volume, the global and per-page speed policy, mute (browser state and icon sampled over
   3 s, with an unmute-event check), global actions, badge, pin, boost plumbing and gating,
   override persistence, adapters (host selection plus hidden/aria-disabled/disabled/absent site
