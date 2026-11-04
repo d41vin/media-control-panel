@@ -9,7 +9,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const ext = join(root, 'extension');
+// the repo keeps the extension in extension/; the packaged archive has it at
+// its root (manifest at the archive root) — resolve whichever this is
+const ext = existsSync(join(root, 'extension', 'manifest.json')) ? join(root, 'extension') : root;
 let failures = 0;
 
 const fail = (msg) => {

@@ -18,9 +18,14 @@
 
   <script type="module">
     import { installMockChrome, faviconSvg } from './mock-chrome.js';
-    import { fmtSpeed } from '../extension/lib/speed.js';
-    import { pageProbe } from '../extension/lib/page.js';
-    import { adapterFor } from '../extension/lib/adapters.js';
+    // the extension sits in extension/ (repo) or at the archive root
+    // (packaged archive, manifest at the root) — resolve once, then import
+    const extBase = (await fetch('../extension/manifest.json').catch(() => null))?.ok
+      ? '../extension/lib/'
+      : '../lib/';
+    const { fmtSpeed } = await import(extBase + 'speed.js');
+    const { pageProbe } = await import(extBase + 'page.js');
+    const { adapterFor } = await import(extBase + 'adapters.js');
 
     const out0 = document.getElementById('out');
     window.addEventListener('error', (e) => {
@@ -151,7 +156,8 @@
     });
 
     try {
-      await import('../extension/background.js');
+      // repo layout: ../extension/background.js — packaged archive: ../background.js
+      await import('../extension/background.js').catch(() => import('../background.js'));
     } catch (e) {
       const div = document.createElement('div');
       div.className = 'fail';
@@ -160,7 +166,7 @@
     }
     // the real offscreen document logic, against the stubs above
     try {
-      await import('../extension/offscreen.js');
+      await import('../extension/offscreen.js').catch(() => import('../offscreen.js'));
     } catch (e) {
       const div = document.createElement('div');
       div.className = 'fail';

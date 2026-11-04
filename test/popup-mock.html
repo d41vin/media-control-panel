@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <title>Media Control — popup mock harness</title>
-  <link rel="stylesheet" href="../extension/popup.css" />
+  <link rel="stylesheet" href="../extension/popup.css" onerror="this.onerror=null;this.href='../popup.css'" />
   <style>
     /* The real popup.css styles body as the 440px popup; in the harness the
        popup lives in a frame next to the fake-browser controls. */
@@ -303,6 +303,9 @@
     setInterval(() => mock.tick(), 1000);
   </script>
 
-  <script type="module" src="../extension/popup.js"></script>
+  <script type="module">
+    // repo layout: ../extension/popup.js — packaged archive: ../popup.js
+    await import('../extension/popup.js').catch(() => import('../popup.js'));
+  </script>
 </body>
 </html>

@@ -25,7 +25,9 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const EXT = join(ROOT, 'extension');
+// the repo keeps the extension in extension/; the packaged archive has it
+// at its root (manifest at the archive root) — resolve whichever this is
+const EXT = existsSync(join(ROOT, 'extension', 'manifest.json')) ? join(ROOT, 'extension') : ROOT;
 const PORT = 9228;
 const SERVE_PORT = 8080;
 const OUT = join(ROOT, 'docs', 'screenshots');

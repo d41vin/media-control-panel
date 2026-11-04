@@ -18,7 +18,12 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const EXT = join(ROOT, 'extension');
+// the repo keeps the extension in extension/; the packaged archive has it
+// at its root (manifest at the archive root) — resolve whichever this is
+const EXT = existsSync(join(ROOT, 'extension', 'manifest.json')) ? join(ROOT, 'extension') : ROOT;
+// URL prefix for the served extension files (fixture pages import the real
+// page.js/adapters.js over HTTP): '/extension' in the repo, '' when packaged
+const EXT_URL = EXT === ROOT ? '' : '/extension';
 const PORT = 9223;
 const SERVE_PORT = 8080;
 
@@ -909,7 +914,7 @@ async function main() {
         let clicks = 0;
         b.click = () => { clicks++; };
         document.body.append(b);
-        const lib = await import('/extension/lib/adapters.js');
+        const lib = await import('${EXT_URL}/lib/adapters.js');
         const r = lib.ADAPTERS.youtube.next();
         b.remove();
         return { acted: r.acted, clicks };
@@ -925,8 +930,8 @@ async function main() {
       cdp,
       mediaSession,
       `(async () => {
-         const { pageProbe } = await import('/extension/lib/page.js');
-         const { adapterFor } = await import('/extension/lib/adapters.js');
+         const { pageProbe } = await import('${EXT_URL}/lib/page.js');
+         const { adapterFor } = await import('${EXT_URL}/lib/adapters.js');
          const b = document.createElement('button');
          b.className = 'ytp-prev-button';
          document.body.append(b);
@@ -1204,7 +1209,7 @@ async function main() {
       cdp,
       psSession,
       `(async () => {
-         const { ADAPTERS } = await import('/extension/lib/adapters.js');
+         const { ADAPTERS } = await import('${EXT_URL}/lib/adapters.js');
          mcpPS.el.playbackRate = 1.5; mcpPS.el.volume = 0.4;
          const before = { ui: mcpPS.ui(), elRate: mcpPS.el.playbackRate };
          const res = ADAPTERS.youtube.syncPlayer();
@@ -1242,7 +1247,7 @@ async function main() {
       cdp,
       psSession,
       `(async () => {
-         const { ADAPTERS } = await import('/extension/lib/adapters.js');
+         const { ADAPTERS } = await import('${EXT_URL}/lib/adapters.js');
          const res = ADAPTERS.youtube.setMuted({ muted: true });
          await new Promise((r) => setTimeout(r, 120)); // reassertion would run now
          return { res, elMuted: mcpPS.el.muted, apiMuted: mcpPS.player.isMuted() };
@@ -1259,7 +1264,7 @@ async function main() {
       cdp,
       psSession,
       `(async () => {
-         const { ADAPTERS } = await import('/extension/lib/adapters.js');
+         const { ADAPTERS } = await import('${EXT_URL}/lib/adapters.js');
          mcpPS.player.mute(); // the site's own control
          const readMuted = ADAPTERS.youtube.readState();
          mcpPS.player.unMute();
@@ -1282,7 +1287,7 @@ async function main() {
       cdp,
       psSession,
       `(async () => {
-         const { ADAPTERS } = await import('/extension/lib/adapters.js');
+         const { ADAPTERS } = await import('${EXT_URL}/lib/adapters.js');
          const evs = mcpPS.events().ratechange;
          mcpPS.el.playbackRate = 2.5; // above the site's rate menu
          const res = ADAPTERS.youtube.syncPlayer();
@@ -1320,7 +1325,7 @@ async function main() {
     await evalIn(
       cdp,
       psSession,
-      `(async () => { const { ADAPTERS } = await import('/extension/lib/adapters.js'); ADAPTERS.youtube.syncPlayer(); ADAPTERS.youtube.syncPlayer(); })()`,
+      `(async () => { const { ADAPTERS } = await import('${EXT_URL}/lib/adapters.js'); ADAPTERS.youtube.syncPlayer(); ADAPTERS.youtube.syncPlayer(); })()`,
       true,
     );
     const evB = await evalIn(cdp, psSession, `mcpPS.events()`, true);
@@ -1337,7 +1342,7 @@ async function main() {
     const noPlayer = await evalIn(
       cdp,
       noPlayerSession,
-      `(async () => { const { ADAPTERS } = await import('/extension/lib/adapters.js'); return ADAPTERS.youtube.syncPlayer(); })()`,
+      `(async () => { const { ADAPTERS } = await import('${EXT_URL}/lib/adapters.js'); return ADAPTERS.youtube.syncPlayer(); })()`,
       true,
     );
     noPlayer?.found === false
