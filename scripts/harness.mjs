@@ -422,6 +422,63 @@ async function main() {
       true,
       45000,
     );
+    // popup state reliability: adapter refresh, ghost-override fallback,
+    // authoritative volume commit (each pins one plans/006 fix)
+    const reliability = await evalIn(
+      cdp,
+      pmSession,
+      `(async () => {
+         const rowFor = (needle) =>
+           [...document.querySelectorAll('.row')].find((r) =>
+             r.querySelector('.t-title').textContent.includes(needle));
+         const out = {};
+         // adapter click refreshes the card even when paused (no ping loop
+         // runs for a paused card): the click must schedule a ping
+         chrome._mock.toggle(1); // pause tab 1's element
+         await new Promise((r) => setTimeout(r, 300));
+         const ytRow = rowFor('Big Buck Bunny —');
+         const callsBefore = chrome._mock.scriptingCalls.length;
+         const clicksBefore = chrome._mock.tabs.get(1)._clicks.next ?? 0;
+         ytRow.querySelector('.next').click();
+         await new Promise((r) => setTimeout(r, 700));
+         const newCalls = chrome._mock.scriptingCalls.slice(callsBefore);
+         out.adapterClicked = (chrome._mock.tabs.get(1)._clicks.next ?? 0) === clicksBefore + 1;
+         out.adapterPingFollowed = newCalls.some((c) => c.func === 'pagePing');
+         chrome._mock.toggle(1); // restore playback
+         await new Promise((r) => setTimeout(r, 150));
+         // page-speed fallback: a command that never lands must restore the
+         // stored truth, not leave a ghost override
+         chrome._mock.refuseSpeedPage = true;
+         const nfRow = rowFor('Netflix');
+         nfRow.querySelector('.rate-inc').click();
+         await new Promise((r) => setTimeout(r, 400));
+         out.ghostShownOptimistic =
+           nfRow.querySelector('.speed-cluster').classList.contains('overridden');
+         await new Promise((r) => setTimeout(r, 3300));
+         out.ghostGone = !nfRow.querySelector('.speed-cluster').classList.contains('overridden') &&
+           nfRow.querySelector('.rate-reset').hidden === true;
+         // the ghost never reached the store (tab 1's real override remains)
+         const ovsAfter = (await chrome.storage.session.get('speedOverrides')).speedOverrides ?? {};
+         out.ghostNotInStore = !ovsAfter[3];
+         // volume commit adopts the applied value: the readout holds across
+         // ping ticks instead of being dragged back by a straddling ping
+         const vRow = rowFor('Big Buck Bunny —');
+         vRow.querySelector('.vol-btn').click();
+         await new Promise((r) => setTimeout(r, 250));
+         const vol = vRow.querySelector('.vol');
+         vol.value = '0.3';
+         vol.dispatchEvent(new Event('input', { bubbles: true }));
+         vol.dispatchEvent(new Event('change', { bubbles: true }));
+         await new Promise((r) => setTimeout(r, 1200));
+         const r1 = vRow.querySelector('.vol-readout').textContent;
+         await new Promise((r) => setTimeout(r, 1200));
+         const r2 = vRow.querySelector('.vol-readout').textContent;
+         out.volumeStable = r1 === '30%' && r2 === '30%';
+         document.body.click(); // close the popover
+         return out;
+       })()`,
+      true,
+    );
     // let any async fallout surface
     await sleep(800);
     const themeOk =
@@ -462,16 +519,24 @@ async function main() {
       b?.retryPending === true &&
       b?.noLyingError === true &&
       b?.finalActive === true;
+    const rel = reliability;
+    const reliabilityOk =
+      rel?.adapterClicked === true &&
+      rel?.adapterPingFollowed === true &&
+      rel?.ghostShownOptimistic === true &&
+      rel?.ghostGone === true &&
+      rel?.ghostNotInStore === true &&
+      rel?.volumeStable === true;
     if (cdp.pageErrors.length) {
       failed = true;
       for (const e of cdp.pageErrors) console.error(`FAIL  popup-mock page error: ${e}`);
     } else if (pmRows < 1 || !pmState.gspeed.startsWith('1.25')) {
       failed = true;
       console.error(`FAIL  popup-mock smoke: rows=${pmRows} state=${JSON.stringify(pmState)}`);
-    } else if (!themeOk || !stepsOk || !muteOk || !audioTruthsOk || !popInertOk || !boostOk) {
+    } else if (!themeOk || !stepsOk || !muteOk || !audioTruthsOk || !popInertOk || !boostOk || !reliabilityOk) {
       failed = true;
       console.error(
-        `FAIL  popup-mock behavior: theme=${themeOk} steps=${stepsOk} mute=${muteOk} audioTruths=${audioTruthsOk} popInert=${popInertOk} boost=${boostOk} state=${JSON.stringify(pmState)}`,
+        `FAIL  popup-mock behavior: theme=${themeOk} steps=${stepsOk} mute=${muteOk} audioTruths=${audioTruthsOk} popInert=${popInertOk} boost=${boostOk} reliability=${JSON.stringify(rel)}`,
       );
     } else {
       console.log(`  ok  popup-mock smoke: ${pmRows} row(s), global ${pmState.gspeed}, override shown: ${pmState.overridden}`);
@@ -482,6 +547,7 @@ async function main() {
       console.log('  ok  popup-mock volume popover: tab audio and player audio independent, player toggle writes the element');
       console.log('  ok  popup-mock popovers: collapsed popovers are inert, the open one interactive, click-away re-inerts');
       console.log('  ok  popup-mock boost: start→gain→stop, truthful failure, and the belt is per-attempt (no lying error over a retry)');
+      console.log('  ok  popup-mock reliability: adapter click refreshes a paused card, a refused page-speed command falls back to the stored truth, the volume readout holds across pings');
     }
 
     if (failed) process.exitCode = 1;

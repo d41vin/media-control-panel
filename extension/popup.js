@@ -130,13 +130,32 @@ const pendingPageSpeed = new Map();
 function notePendingPageSpeed(tabId, pending) {
   pendingPageSpeed.set(tabId, pending);
   // a command that never confirms (dead tab, no receiver) falls back to the
-  // stored truth instead of pinning the card to a ghost choice
+  // stored truth instead of pinning the card to a ghost choice — so the
+  // timeout must RELOAD the store, not just drop the marker: the optimistic
+  // mirror entry setPageSpeed wrote would otherwise survive as a ghost
+  // override (accent value, reset button, wrong step base)
   setTimeout(() => {
-    if (pendingPageSpeed.get(tabId) === pending) {
-      pendingPageSpeed.delete(tabId);
+    if (pendingPageSpeed.get(tabId) !== pending) return; // superseded meanwhile
+    pendingPageSpeed.delete(tabId);
+    void (async () => {
+      try {
+        const { speedOverrides } = await chrome.storage.session.get('speedOverrides');
+        // a NEWER command may have raced the storage read — its pending
+        // marker must win over this reload
+        if (pendingPageSpeed.has(tabId)) return;
+        overrides = new Map(
+          Object.entries(
+            speedOverrides && typeof speedOverrides === 'object' ? speedOverrides : {},
+          ).map(([k, v]) => [Number(k), v]),
+        );
+      } catch {
+        // storage unavailable: at minimum drop this tab's optimistic entry
+        overrides.delete(tabId);
+      }
       const r = rows.get(tabId);
       if (r) updateRow(r);
-    }
+      renderGlobalSpeed();
+    })();
   }, 3000);
 }
 /** tabId -> { gain, state: 'pending'|'active'|'error', error? } — boost state */
@@ -575,7 +594,15 @@ function wireCard(rec) {
         const wanted = rec.pendingVolume;
         rec.pendingVolume = null;
         void (async () => {
-          await exec(rec, pageSetVolume, { volume: wanted });
+          const applied = await exec(rec, pageSetVolume, { volume: wanted });
+          // adopt what actually landed immediately: a ping dispatched before
+          // the write must not drag the readout back to the pre-drag value
+          // for up to a second
+          const p = applied?.acted ? primaryOfProbe(rec.probe)?.element : null;
+          if (p && Number.isFinite(applied.volume)) {
+            p.volume = applied.volume;
+            if (rows.get(rec.tab.id) === rec && !rec.dragging) updateRow(rec);
+          }
           // hosts with a private player API need the API channel too —
           // element writes alone don't move their UI
           await syncSitePlayer(rec);
@@ -1468,6 +1495,10 @@ async function runAdapter(rec, direction) {
       target: targetFor(rec),
       func: direction === 'next' ? rec.adapter.next : rec.adapter.prev,
     });
+    // a paused card has no ping loop: without this the card keeps the old
+    // track's title/times until the user interacts (Spotify, muted tabs) —
+    // the same confirmation ping every transport button schedules
+    setTimeout(() => void pingNow(rows.get(rec.tab.id)), 250);
   } catch {
     // tab gone or uninjectable; nothing to correct
   }
