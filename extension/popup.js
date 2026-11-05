@@ -1308,27 +1308,34 @@ function stopPing(rec) {
 
 // --- global actions and pinned target ------------------------------------------------
 
+/**
+ * The shared pause dispatch: mark the play state and the command ordering
+ * BEFORE injecting, so any ping or probe already in flight is stale and
+ * cannot flip the tab back to playing; the pending flag also covers pings
+ * dispatched after the mark but racing the pause. Used by Pause all and by
+ * exclusive playback's pause-others loop — the ordering rules live HERE and
+ * nowhere else.
+ */
+async function pauseViaCommand(rec) {
+  rec.mediaPlaying = false;
+  rec.commandAt = Date.now();
+  rec.commandPending = true;
+  updateRow(rec);
+  try {
+    // all frames: media can live in embeds outside the primary frame
+    await chrome.scripting.executeScript({
+      target: { tabId: rec.tab.id, allFrames: true },
+      func: pagePause,
+    });
+  } catch {
+    // tab gone; onRemoved cleans up
+  } finally {
+    rec.commandPending = false;
+  }
+}
+
 async function pauseAll() {
-  const jobs = [...rows.values()].filter((r) => r.playing).map(async (rec) => {
-    rec.mediaPlaying = false;
-    // mark the ordering BEFORE dispatch: any ping or probe already in flight
-    // is stale and must not flip this tab back to playing; the pending flag
-    // also covers pings dispatched after the mark but racing the pause
-    rec.commandAt = Date.now();
-    rec.commandPending = true;
-    updateRow(rec);
-    try {
-      // all frames: media can live in embeds outside the primary frame
-      await chrome.scripting.executeScript({
-        target: { tabId: rec.tab.id, allFrames: true },
-        func: pagePause,
-      });
-    } catch {
-      // tab gone; onRemoved cleans up
-    } finally {
-      rec.commandPending = false;
-    }
-  });
+  const jobs = [...rows.values()].filter((r) => r.playing).map((rec) => pauseViaCommand(rec));
   await Promise.allSettled(jobs);
   refreshChrome();
   reorder();
@@ -1494,23 +1501,7 @@ async function playExclusive(rec) {
   updateRow(rec);
   const jobs = [...rows.values()]
     .filter((r) => r !== rec && r.playing)
-    .map(async (other) => {
-      other.mediaPlaying = false;
-      other.commandAt = Date.now(); // in-flight pings/probes are stale
-      other.commandPending = true;
-      updateRow(other);
-      try {
-        // all frames: media can live in embeds outside the primary frame
-        await chrome.scripting.executeScript({
-          target: { tabId: other.tab.id, allFrames: true },
-          func: pagePause,
-        });
-      } catch {
-        // tab gone; onRemoved cleans up
-      } finally {
-        other.commandPending = false;
-      }
-    });
+    .map((other) => pauseViaCommand(other));
   await Promise.allSettled(jobs);
   refreshChrome();
   reorder();

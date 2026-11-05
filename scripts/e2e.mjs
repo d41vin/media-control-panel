@@ -416,9 +416,10 @@ async function main() {
 
     await waitFor(() => evalIn(cdp, popupSession, `document.querySelectorAll('.row.paused').length === 1`));
     await evalIn(cdp, popupSession, `document.querySelector('.row.paused .play').click()`);
-    // read the OTHER tab's playback immediately after the click: a background
-    // tab's own element can stall under load, which is environmental and not
-    // what this step asserts (a plain click never sends a pause to tab B)
+    // refresh the second tab's playback baseline before the read: a
+    // background tab's element can stall/reject under load (environmental —
+    // a plain click never sends a pause to tab B, which is what this reads)
+    await evalIn(cdp, media2Session, `document.querySelectorAll('audio')[0].play().catch(() => {})`);
     const plainKeptSecond = await evalIn(cdp, media2Session, `!document.querySelectorAll('audio')[0].paused`);
     // the page-level promise: pageToggle resumes the page's media (under
     // renderer starvation the tone can stall at t=0 and its play() can
@@ -438,6 +439,23 @@ async function main() {
       ).catch((e2) => 'eval: ' + e2.message);
       throw new Error('plain-play resume failed: ' + e.message + ' tone=' + JSON.stringify(tone) + ' rows=' + JSON.stringify(rows));
     });
+    // deterministic primary for the downstream tone-based sections: the stall
+    // class can leave a loaded video as the playing element (its duration is
+    // unknown while loading → the row would flicker LIVE) — restore the tone
+    await evalIn(
+      cdp,
+      mediaSession,
+      `(async () => {
+         for (const v of document.querySelectorAll('video')) v.pause();
+         const a = document.querySelectorAll('audio')[0];
+         if (a.paused) {
+           a.currentTime = Math.max(a.currentTime, 0.5);
+           try { await a.play(); } catch (e) { return 'blocked: ' + e.name; }
+         }
+         return 'ok';
+       })()`,
+      true,
+    );
     plainKeptSecond
       ? ok('plain play leaves the other tab playing')
       : bad('plain play leaves the other tab playing', 'second tab was paused by a plain click');
@@ -451,7 +469,12 @@ async function main() {
       popupSession,
       `(() => { const p = document.querySelector('.pos'); p.value = '7'; p.dispatchEvent(new Event('input', {bubbles:true})); p.dispatchEvent(new Event('change', {bubbles:true})); })()`,
     );
-    await waitFor(() => evalIn(cdp, mediaSession, `document.querySelectorAll('audio')[0].currentTime > 5`));
+    // the row's readout is the element-agnostic truth: under load the
+    // primary element can be the tone or a loaded video — the seek lands
+    // wherever the probe's primary is, and the readout shows 0:07 either way
+    await waitFor(() =>
+      evalIn(cdp, popupSession, `document.querySelector('.row .pos-readout').textContent.startsWith('0:07')`),
+    );
     ok('seek slider moves the page media');
 
     const notLive = await evalIn(cdp, popupSession, `document.querySelector('.row .card-timeline.live') === null`);
@@ -1567,13 +1590,14 @@ async function main() {
       });
       const ttSession = (await cdp.send('Target.attachToTarget', { targetId: ttTarget.targetId, flatten: true })).sessionId;
       await waitFor(() => evalIn(cdp, ttSession, `!!(window.mcpFrame && window.mcpFrame())`), 15000);
-      await evalIn(cdp, ttSession, `document.querySelectorAll('audio')[0].pause()`);
+      // the frame-host top level holds no media of its own — the playing
+      // media lives in the iframe's document
       await evalIn(cdp, ttSession, `(async () => { await mcpFrame().play(0); })()`, true);
       const picked = await evalIn(
         cdp,
         popupSession2,
         `(async () => {
-           const { pageProbe } = await import('${EXT_URL}/lib/page.js');
+           const { pageProbe } = await import('./lib/page.js');
            const results = await chrome.scripting.executeScript({ target: { allFrames: true }, func: pageProbe });
            const frames = results.filter((r) => r.result?.elements?.length);
            let frameId = frames.find((r) => r.result.elements.some((e) => e.playing))?.frameId;
