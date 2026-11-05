@@ -1296,6 +1296,48 @@
     await chrome.storage.local.set({ speed: 1 });
     await until(async () => ((await chrome.storage.session.get('speedManaged')).speedManaged ?? []).length === 0);
 
+    // --- rapid global changes coalesce into one follow-up pass -----------------
+    // Three rapid changes used to queue three complete fan-outs whose
+    // intermediate passes were immediately superseded; a change arriving while
+    // a pass is running now marks it dirty and exactly one follow-up pass
+    // converges every tab to the newest rate.
+    await chrome.storage.local.set({ speed: 1.5 });
+    await until(async () => ((await chrome.storage.session.get('speedManaged')).speedManaged ?? []).includes(1));
+    const passesAtBurst = mock.speedSyncPasses ?? 0;
+    // hold the pass's reads so it is provably ACTIVE when the burst lands:
+    // the mock's storage resolves in microtasks, and without the gate the
+    // pass would finish between the sets and the dirty-flag never engage
+    chrome._mock.storageGetGate = new Promise((r) => { chrome._mock.releaseStorageGetGate = r; });
+    await chrome.storage.local.set({ speed: 2 }); // the pass parks at the gate
+    await new Promise((r) => setTimeout(r, 30));
+    await chrome.storage.local.set({ speed: 2.5 }); // dirty
+    await chrome.storage.local.set({ speed: 3 }); // dirty — same settled rate
+    chrome._mock.releaseStorageGetGate();
+    chrome._mock.storageGetGate = null;
+    await until(() =>
+      mock.scriptingCalls.some(
+        (c) => c.func === 'installSpeedManager' && c.target.tabId === 1 && c.args?.[0]?.rate === 3,
+      ),
+    );
+    // the settled rate holds: no stale rate lands after the rate-3 install
+    await until(() => {
+      const calls = mock.scriptingCalls.filter(
+        (c) => c.func === 'installSpeedManager' && c.target.tabId === 1,
+      );
+      const last = calls.at(-1);
+      const firstThree = calls.findIndex((c) => c.args?.[0]?.rate === 3);
+      return last?.args?.[0]?.rate === 3 &&
+        !calls.slice(firstThree + 1).some((c) => c.args?.[0]?.rate !== 3);
+    });
+    // three changes → at most two fan-out passes (the running pass + one
+    // follow-up); pre-fix each change queued its own complete pass
+    const burstPasses = (mock.speedSyncPasses ?? 0) - passesAtBurst;
+    assert('rapid global changes coalesce (≤2 fan-out passes for three changes)',
+      burstPasses <= 2,
+      `fan-out passes during the burst=${burstPasses}`);
+    await chrome.storage.local.set({ speed: 1 });
+    await until(async () => ((await chrome.storage.session.get('speedManaged')).speedManaged ?? []).length === 0);
+
     // --- report ------------------------------------------------------------------
     for (const { name, ok, detail } of results) {
       const div = document.createElement('div');

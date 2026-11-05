@@ -469,23 +469,52 @@ async function speedSyncTargets() {
   return [...ids];
 }
 
-async function syncSpeedEverywhere() {
-  return queueSpeedSync(async () => {
-    // every previously managed tab must hear the change even when it is not
-    // injectable any more — otherwise a manager survives with a stale
-    // expectation
-    const targets = await speedSyncTargets();
-    if (!enforcementNeeded()) {
-      for (const tabId of targets) {
+async function syncSpeedEverywhereBody() {
+  // every previously managed tab must hear the change even when it is not
+  // injectable any more — otherwise a manager survives with a stale
+  // expectation
+  const targets = await speedSyncTargets();
+  if (!enforcementNeeded()) {
+    await Promise.all(
+      targets.map(async (tabId) => {
         await sendToTab(tabId, { type: 'mcp-speed-disconnect' });
         noteUnmanaged(tabId);
-      }
-      return;
+      }),
+    );
+    return;
+  }
+  // tabs don't interact: one batch runs them concurrently while the chain
+  // still serializes batch-vs-batch (R6) — per-tab applies are rev-guarded,
+  // so within-batch parallelism cannot land applies out of order
+  await Promise.all(targets.map((tabId) => rawSyncSpeedTab(tabId)));
+}
+
+// Rapid global-speed changes queue one full fan-out each whose intermediate
+// passes are immediately superseded (every per-tab sync re-reads live state,
+// so only the last matters): one settled rate → one pass. A change arriving
+// while a pass is queued/running marks the pass dirty; exactly one follow-up
+// pass converges every tab to the newest rate.
+let speedFanoutDirty = false;
+let fanoutPassActive = false;
+function requestSpeedEverywhere() {
+  if (fanoutPassActive) {
+    speedFanoutDirty = true;
+    return;
+  }
+  return queueSpeedSync(runSpeedEverywherePass);
+}
+
+async function runSpeedEverywherePass() {
+  fanoutPassActive = true;
+  try {
+    await syncSpeedEverywhereBody();
+    while (speedFanoutDirty) {
+      speedFanoutDirty = false;
+      await syncSpeedEverywhereBody();
     }
-    for (const tabId of targets) {
-      await rawSyncSpeedTab(tabId);
-    }
-  });
+  } finally {
+    fanoutPassActive = false;
+  }
 }
 
 // --- boost capture -------------------------------------------------------------------
@@ -847,7 +876,7 @@ async function routeMessage(msg, sender) {
       // popup open (or install): reconcile every candidate tab once, and
       // check the boost pipeline's existence against the session truth
       await refreshSpeedState();
-      await syncSpeedEverywhere();
+      await requestSpeedEverywhere();
       await reconcileBoosts();
       return;
     }
@@ -1112,7 +1141,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.settings) void refreshSettings();
   if (area === 'local' && changes.speed) {
     globalSpeed = clampSpeed(changes.speed.newValue);
-    void syncSpeedEverywhere();
+    void requestSpeedEverywhere();
   }
   // speedOverrides is NOT re-read here: this worker is its only writer, and
   // re-reading own writes lets a slow earlier write regress the cache (two
@@ -1138,7 +1167,7 @@ chrome.runtime.onInstalled.addListener(() => {
   void chrome.action.setBadgeBackgroundColor({ color: '#e30613' });
   void chrome.action.setBadgeTextColor({ color: '#ffffff' });
   void refreshSettings();
-  void ensureSpeedState().then(() => syncSpeedEverywhere());
+  void ensureSpeedState().then(() => requestSpeedEverywhere());
 });
 
 // initial state after every worker start — the speed re-sync is what makes
@@ -1151,7 +1180,7 @@ void (async () => {
   await ensureBoostState();
   await reconcileBoosts(true); // a fresh worker: no startup can be in flight
   await updateBadge();
-  if (enforcementNeeded()) void syncSpeedEverywhere();
+  if (enforcementNeeded()) void requestSpeedEverywhere();
 })();
 
 // --- keyboard commands ------------------------------------------------------------

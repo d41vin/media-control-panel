@@ -354,6 +354,18 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
           // startup state load completes (test/background-restart.html's
           // cold-race scenario). Never set outside that page.
           if (chrome._mock?.storageGetGate) await chrome._mock.storageGetGate;
+          // pass counter: speedSyncTargets() is the only caller of this
+          // exact two-key read — one per global-speed fan-out pass (the
+          // coalescing regression test counts these)
+          if (
+            chrome._mock &&
+            Array.isArray(keys) &&
+            keys.length === 2 &&
+            keys[0] === 'recent' &&
+            keys[1] === 'target'
+          ) {
+            chrome._mock.speedSyncPasses = (chrome._mock.speedSyncPasses ?? 0) + 1;
+          }
           if (typeof keys === 'string') return { [keys]: map.get(keys) };
           if (Array.isArray(keys)) {
             return Object.fromEntries(keys.map((k) => [k, map.get(k)]));
