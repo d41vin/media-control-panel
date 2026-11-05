@@ -193,8 +193,11 @@ command matrix plus the speed-policy and boost state machines.
 
 - `npm test` — static checks (module syntax, manifest sanity, icons, references, and a guard
   that injected functions stay serialization-safe).
-- `npm run harness` — runs both mock pages in headless Chrome (Edge via `MCP_BROWSER=edge`): 79 background assertions
-  (commands, badge, speed-policy coordination including policy revisions, documentId
+- `npm run harness` — runs three mock pages in headless Chrome (Edge via `MCP_BROWSER=edge`): the
+  background command/speed/boost page (100 assertions), a fresh-worker cold-start/restart page
+  (12 assertions: a cold boost event must not wipe another tab's pipeline; restart reconciliation
+  both ways), and the popup smoke page. Covers: commands, badge, speed-policy coordination
+  including policy revisions, documentId
   scoping for SPA/reload/hash transitions and frame-aware report provenance, silent-
   tab coverage, tabs created after the global speed is set, player-initialization
   1.00× writes re-stamped instead of adopted, `defaultPlaybackRate` stamping/teardown,
@@ -213,7 +216,7 @@ command matrix plus the speed-policy and boost state machines.
 - `npm run e2e` — launches real Google Chrome (via CDP; branded Chrome 137+ ignores
   `--load-extension`, so the unpacked extension is loaded through the DevTools `Extensions` domain
   after connect; Edge via `MCP_BROWSER=edge`), opens the popup as an extension page,
-  and drives 122 end-to-end assertions: detection, titles, play/pause/resume, exclusive playback,
+  and drives 132 end-to-end assertions: detection, titles, play/pause/resume, exclusive playback,
   seek, volume, the global and per-page speed policy, mute (browser state and icon sampled over
   3 s, with an unmute-event check), global actions, badge, pin, boost plumbing and gating,
   override persistence, adapters (host selection plus hidden/aria-disabled/disabled/absent site
@@ -252,8 +255,8 @@ browser profile. The test rigs default to Google Chrome (Edge via `MCP_BROWSER=e
 | Command | What it runs | Result |
 |---|---|---|
 | `npm test` | static checks, no browser | passed |
-| `npm run harness` | headless mock pages (background logic + popup smoke) | passed — 79 background assertions + popup mock |
-| `npm run e2e` | full end-to-end suite in real Chrome | 129/129 |
+| `npm run harness` | headless mock pages (background logic + popup smoke) | passed — 100 background assertions + 12 restart scenarios + popup mock |
+| `npm run e2e` | full end-to-end suite in real Chrome | 132/132 |
 | `npm run e2e:headed` | the same suite in a headed Chrome window (audio live) — the capture-adjacent active-boost assertions run only if this build grants capture to the CDP-opened popup; otherwise it records the refusal and continues | runs; capture grant is a manual check (CHECKLIST #59d) |
 | `npm run youtube-check` | real youtube.com in a headed Chrome window | 13/13 |
 | `npm run verify-capture` | headed probe of the capture API's activeTab behavior | records the browser's refusal (toolbar-click check remains manual) |

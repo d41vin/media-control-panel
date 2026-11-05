@@ -29,8 +29,8 @@ and the manual-test-fixes addendum).
   extension in real Chrome and drives the popup as an extension page;
   `npm run youtube-check` drives real youtube.com in a headed window. Last
   verified in **Google Chrome 156.0.8078.76 (2026-11-04)**: `npm test` passed,
-  harness passed (79 background assertions + popup mock), `npm run e2e`
-  122/122, `npm run youtube-check` 13/13 (mute matrix against real
+  harness passed (100 background assertions + 12 restart scenarios + popup
+  mock), `npm run e2e` 132/132, `npm run youtube-check` 13/13 (mute matrix against real
   youtube.com, actual playback at 2× / 2.5× / 4× / 8× / 16×).
 - **Synchronization model.** Generic pages are controlled at the media-element
   level; standard `volumechange`/`ratechange` events carry changes both ways.
