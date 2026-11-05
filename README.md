@@ -12,13 +12,21 @@ nothing to compile.
 Microsoft Edge is supported as an optional secondary target for compatibility
 checks (`MCP_BROWSER=edge` in the test rigs).
 
-Everything is local: no accounts, no analytics, no network requests, and audio
-boost processing never leaves the device. Persistent state is the pinned target
-and the recently-playing list (`chrome.storage.session`, cleared when the
-browser closes), preferences (including Appearance) and the global speed
-(`chrome.storage.local`), per-page speed overrides (`chrome.storage.session`,
-cleared on navigation or browser exit), and the active boost state
-(`chrome.storage.session`; never restored after a browser restart).
+Everything is local: no accounts, no analytics, and audio boost processing
+never leaves the device. The only network requests are the image loads the
+popup renders from page-provided sources — the page's mediaSession artwork
+and the tab's favicon — and those go to the page's own hosts. Persistent
+state is the pinned target and the recently-playing list
+(`chrome.storage.session`, cleared when the browser closes), preferences
+(including Appearance) and the global speed (`chrome.storage.local`),
+per-page speed overrides (`chrome.storage.session`, cleared on navigation or
+browser exit), and the active boost state (`chrome.storage.session`; never
+restored after a browser restart). Speed overrides are scoped to the
+committed document of each tab and iframe — the current committed URL and
+`documentId` of each tab (and iframe) are held in `chrome.storage.session`
+(replaced on every navigation, cleared when the browser closes) because that
+identity is what scopes per-page overrides and validates frame report
+provenance; nothing is logged and nothing leaves the device.
 
 | Light | Dark |
 |---|---|
@@ -260,7 +268,8 @@ separate again (real action popup, content-only capture).
 
 ## Why it's light
 
-While the popup is closed the extension is two sleeping event listeners (badge +
+While the popup is closed the extension is a handful of sleeping event
+listeners (badge +
 keyboard commands), plus — only when a speed policy needs enforcing — event-driven
 page managers inside media tabs. There are still **no persistent content scripts in
 the manifest**; the speed manager is injected on demand (`chrome.scripting`) into
@@ -292,8 +301,11 @@ Permissions, exactly:
 
 No `tabs` permission — audible/muted state is free, and host permissions already unlock titles.
 `webNavigation` carries Chrome's "Read your browsing history" install warning; the extension
-listens only to top-frame commit/history events to scope speed overrides to the right document
-(boost is tab-level and is not tied to a navigation). It stores nothing about where you browse.
+consumes top-frame commit/history events to scope speed overrides to the right document, and
+subframe commit events to validate which frame's document a native speed report came from
+(iframe media). The committed URL + documentId of each tab and iframe is held in
+`chrome.storage.session` (replaced per navigation, cleared when the browser closes); nothing
+is logged and nothing leaves the device.
 
 **Boost privacy and targeting**: tab capture starts only from your click on a specific tab's
 boost control, and the platform restricts capture targets to tabs with the `activeTab` grant —

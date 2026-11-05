@@ -5,9 +5,11 @@ Findings that shaped the v2.0 architecture. Sources listed at the bottom.
 ## Current state (2026-11-04) — read this first
 
 The dated sections below are the research log as it was written; where they
-mention Edge, an old assertion count, or "YouTube's volume UI cannot be
-synchronized", they describe that point in time and are superseded by this
-summary.
+mention Edge, an old assertion count, "YouTube's volume UI cannot be
+synchronized", the seek bar's interpolation, or **boost being cleared on
+navigation**, they describe that point in time and are superseded by this
+summary (boost is a TAB setting that survives navigation — see DESIGN.md B2
+and the manual-test-fixes addendum).
 
 - **Browsers.** Google Chrome is the primary browser and the browser the
   extension is used in. Microsoft Edge is an optional secondary target for
@@ -147,9 +149,10 @@ at idle.
   `action.setBadgeText` when the count actually changes. No intervals, no ports,
   no keep-alives — the worker sleeps after 30 s like any MV3 worker.
 - No `tabs.onUpdated` work in the popup either beyond cheap field copies.
-- Seek bar: no polling loop. One thin probe per second *only while a row is
-  expanded and playing*, plus local interpolation between probes; everything
-  clears on collapse/close.
+- Seek bar: no polling loop. One thin probe per second only while a card's
+  media is playing (or the volume popover keeps a paused card's loop alive);
+  readouts come from the probe/ping with no interpolation between them;
+  everything clears on collapse/close.
 - Probe cost is bounded by real media usage: audible ∪ muted ∪ pinned tabs,
   typically 1–5 `executeScript` calls per popup open.
 
