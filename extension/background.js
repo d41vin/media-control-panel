@@ -18,12 +18,20 @@
 // while a speed policy is active, injected page managers keep listeners alive
 // inside media tabs; while a boost is active, the offscreen audio document
 // exists. Neither runs at factory defaults.
+//
+// Console convention: MCPDBG-prefixed output is the only sanctioned console
+// output (the test harness prints it); every other failure path swallows
+// with an explanatory comment.
 
 import { pagePause, pageProbe, pageToggle } from './lib/page.js';
 import { adapterFor } from './lib/adapters.js';
 import { installSpeedManager } from './lib/manager.js';
 import { loadSettings } from './lib/settings.js';
 import {
+  BOOST_ERROR_CLEAR_MS,
+  BOOST_MAX,
+  BOOST_MIN,
+  BOOST_START_TIMEOUT_MS,
   SPEED_DEFAULT,
   clampSpeed,
   loadGlobalSpeed,
@@ -599,7 +607,6 @@ function releaseBoostStart(tabId) {
 // End-to-end startup deadline per tab, armed when the request begins — it
 // covers offscreen creation, the stream-id fetch, forwarding, getUserMedia
 // and graph setup, not merely the tail of the flow.
-const BOOST_START_TIMEOUT_MS = 12000;
 const boostTimers = new Map(); // tabId -> timeout handle
 
 function clearBoostTimer(tabId) {
@@ -658,8 +665,8 @@ function failBoostStart(tabId, reqId, error) {
 
 function clampGainPct(pct) {
   const n = Number(pct);
-  if (!Number.isFinite(n)) return 100;
-  return Math.min(600, Math.max(100, Math.round(n)));
+  if (!Number.isFinite(n)) return BOOST_MIN;
+  return Math.min(BOOST_MAX, Math.max(BOOST_MIN, Math.round(n)));
 }
 
 // Serialize offscreen document create/close so a start racing an idle-close
@@ -773,7 +780,7 @@ function clearBoostErrorLater(tabId) {
       delete boosts[tabId];
       void writeBoosts().then(() => withOffscreenGate(closeOffscreenIfIdle));
     }
-  }, 8000);
+  }, BOOST_ERROR_CLEAR_MS);
 }
 
 // --- extension messages ------------------------------------------------------------

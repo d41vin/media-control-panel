@@ -43,6 +43,8 @@ function send(msg) {
   }
 }
 
+// The 100-600 % range (a 1-6 multiplier) is owned by lib/speed.js
+// (BOOST_MIN/BOOST_MAX) — this plain script cannot import it; keep in sync.
 function gainMultiplier(pct) {
   const n = Number(pct);
   if (!Number.isFinite(n)) return 1;

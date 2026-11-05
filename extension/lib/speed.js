@@ -28,6 +28,22 @@ export const SPEED_MAX = 16; // Chromium's media ceiling; 0.25x steps to it
 export const SPEED_STEP = 0.25;
 export const SPEED_DEFAULT = 1;
 
+// --- boost (tab volume boost range) --------------------------------------------
+// Single source for the boost range and its paired deadlines: the popup's
+// slider attributes, the worker's clamp and the popup's belt/auto-clear all
+// derive from these. The offscreen document is a plain script and cannot
+// import — its gainMultiplier carries a comment pinning it here.
+export const BOOST_MIN = 100;
+export const BOOST_MAX = 600;
+export const BOOST_STEP = 10;
+/** Worker-side startup deadline for a capture request; the popup arms its
+    belt 3 s behind this as the last line of defense. */
+export const BOOST_START_TIMEOUT_MS = 12000;
+/** Popup-side belt for a start that never reports back. */
+export const BOOST_RESULT_BELT_MS = 15000;
+/** Error entries auto-clear after this long (both sides). */
+export const BOOST_ERROR_CLEAR_MS = 8000;
+
 /** Clamp to the supported range without snapping to the grid. */
 export function clampSpeed(rate) {
   if (!Number.isFinite(rate)) return SPEED_DEFAULT;
@@ -35,10 +51,6 @@ export function clampSpeed(rate) {
 }
 
 /** Clamp AND snap to the 0.25 grid — extension-initiated adjustments only. */
-export function snapSpeed(rate) {
-  return clampSpeed(Math.round(rate / SPEED_STEP) * SPEED_STEP);
-}
-
 /**
  * Display a rate without ever hiding what the website really reported:
  * values that ARE two-decimal values get the familiar two digits (1.10×),

@@ -28,21 +28,20 @@ import {
 import { adapterFor } from './lib/adapters.js';
 import { DEFAULT_SETTINGS, THEMES, loadSettings, saveSettings } from './lib/settings.js';
 import {
+  BOOST_ERROR_CLEAR_MS,
+  BOOST_MAX,
+  BOOST_MIN,
+  BOOST_RESULT_BELT_MS,
+  BOOST_STEP,
   SPEED_MIN,
   SPEED_MAX,
   SPEED_DEFAULT,
   SPEED_STEP,
   clampSpeed,
-  snapSpeed,
   fmtSpeed,
   loadGlobalSpeed,
   saveGlobalSpeed,
 } from './lib/speed.js';
-
-// The popup's belt for a boost start that never reports back. The worker
-// converges its own state at 12 s (plans: BOOST_START_TIMEOUT_MS); this is
-// the last line of defense, armed 3 s behind it.
-const BOOST_RESULT_BELT_MS = 15000;
 
 // A card's ping reports "no media here" this many consecutive times before
 // the popup re-probes the tab (an SPA detached its video) — applyProbe(null)
@@ -90,8 +89,6 @@ const ICONS = {
   // boost: speaker with a plus — amplification, not a download
   boost:
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3z"/><path d="M18 3.5v7M14.5 7h7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
-  gauge:
-    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a9 9 0 0 0-9 9c0 2.2.8 4.2 2.1 5.8l1.5-1.3A6.9 6.9 0 0 1 5.1 13 6.9 6.9 0 1 1 17 18.4l1.4 1.5A9 9 0 0 0 12 4z"/><path d="m12.9 14.6-5.2-5.4 1.5-1.4 5 5.3a1.7 1.7 0 1 1-1.3 1.5z"/></svg>',
   // ±10 s: circular transport arrows that carry the 10 (never confusable
   // with prev/next track)
   rewind10:
@@ -407,10 +404,10 @@ function makeRow(tab) {
   boostPopHead.append(boostPopReadout);
   const boost = el('input', 'boost');
   boost.type = 'range';
-  boost.min = '100';
-  boost.max = '600';
-  boost.step = '10';
-  boost.value = '100';
+  boost.min = String(BOOST_MIN);
+  boost.max = String(BOOST_MAX);
+  boost.step = String(BOOST_STEP);
+  boost.value = String(BOOST_MIN);
   boost.setAttribute('aria-label', 'Tab volume boost');
   const boostActions = el('div', 'boost-actions');
   const boostReset = el('button', 'text-btn boost-reset');
@@ -780,7 +777,7 @@ function pageOverride(tabId) {
 async function stepPageSpeed(rec, delta) {
   if (!rec) return;
   // step FROM the observed/effective rate in exact 0.25 increments — a native
-  // 1.10× becomes 1.35×, not the grid-snapped 1.25× (clampSpeed, not snapSpeed)
+  // 1.10× becomes 1.35×, not grid-snapped (extension steps clamp, never snap)
   const current = displayedSpeed(rec);
   await setPageSpeed(rec, clampSpeed(current + delta));
 }
@@ -850,7 +847,7 @@ function scheduleBoostErrorClear(tabId) {
     if (cur?.state === 'error') setBoostLocal(tabId, undefined);
     const r = rows.get(tabId);
     if (r) r.errorTimer = undefined;
-  }, 8000);
+  }, BOOST_ERROR_CLEAR_MS);
   if (rec) rec.errorTimer = timer;
 }
 
@@ -1106,7 +1103,7 @@ function syncCard(rec) {
   // (tabCapture targets need the activeTab grant); an existing boost stays
   // visible and stoppable from any card.
   const bs = boostStates.get(rec.tab.id);
-  const boostPct = bs?.gain ?? 100;
+  const boostPct = bs?.gain ?? BOOST_MIN;
   const boostStartable = rec.tab.id === activeTabId;
   const chipReadout = n.boostBtn.querySelector('.boost-readout');
   if (bs?.state === 'pending') {
