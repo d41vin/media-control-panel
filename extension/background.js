@@ -54,26 +54,41 @@ async function updateBadge() {
 const RECENT_MAX = 8;
 let recentEnabled = true;
 
+// The recent list is read-modify-write from unsynchronized events (audible
+// flips, tab removals): two tabs going audible in the same tick would both
+// read the same base list and the second write would drop the first tab.
+// One promise chain serializes every mutation.
+let recentChain = Promise.resolve();
+function mutateRecent(fn) {
+  const run = recentChain.then(fn);
+  recentChain = run.catch(() => {});
+  return run;
+}
+
 async function noteRecent(tabId) {
   if (!recentEnabled) return;
-  try {
-    const { recent } = await chrome.storage.session.get('recent');
-    const next = [tabId, ...((recent ?? []).filter((id) => id !== tabId))].slice(0, RECENT_MAX);
-    await chrome.storage.session.set({ recent: next });
-  } catch {
-    // storage unavailable; the popup just won't show paused media
-  }
+  await mutateRecent(async () => {
+    try {
+      const { recent } = await chrome.storage.session.get('recent');
+      const next = [tabId, ...((recent ?? []).filter((id) => id !== tabId))].slice(0, RECENT_MAX);
+      await chrome.storage.session.set({ recent: next });
+    } catch {
+      // storage unavailable; the popup just won't show paused media
+    }
+  });
 }
 
 async function pruneRecent(tabId) {
-  try {
-    const { recent } = await chrome.storage.session.get('recent');
-    if (Array.isArray(recent) && recent.includes(tabId)) {
-      await chrome.storage.session.set({ recent: recent.filter((id) => id !== tabId) });
+  await mutateRecent(async () => {
+    try {
+      const { recent } = await chrome.storage.session.get('recent');
+      if (Array.isArray(recent) && recent.includes(tabId)) {
+        await chrome.storage.session.set({ recent: recent.filter((id) => id !== tabId) });
+      }
+    } catch {
+      // nothing to do
     }
-  } catch {
-    // nothing to do
-  }
+  });
 }
 
 // Settings live in storage.local; the sleeping worker wakes on the change,
@@ -165,7 +180,13 @@ function overrideIsCurrent(tabId) {
   return true;
 }
 
+// Load-once per worker life: the worker is the sole writer of these maps,
+// and re-reading own (possibly slower) writes would regress newer in-memory
+// state — the exact hazard the storage.onChanged comments forbid. Storage
+// remains the restart-recovery source (a fresh worker loads it here).
+let speedStateLoaded = false;
 async function refreshSpeedState() {
+  if (speedStateLoaded) return;
   const [g, o, m, r, c, f] = await Promise.all([
     loadGlobalSpeed(),
     loadOverrides(),
@@ -182,6 +203,7 @@ async function refreshSpeedState() {
   tabRevs = r.speedRevs && typeof r.speedRevs === 'object' ? r.speedRevs : {};
   committedDocs = c.speedCommitted && typeof c.speedCommitted === 'object' ? c.speedCommitted : {};
   frameDocs = f.speedFrameDocs && typeof f.speedFrameDocs === 'object' ? f.speedFrameDocs : {};
+  speedStateLoaded = true;
 }
 
 // The worker's event listeners fire before the async startup IIFE below has
@@ -331,13 +353,22 @@ async function rawSyncSpeedTab(tabId, pageUrl, adoptForeign = true) {
     noteUnmanaged(tabId);
     return;
   }
-  const rate = effectiveRate(tabId);
   // executeScript fails intermittently on busy tabs (frame not ready, tab
   // mid-navigation). A swallowed failure strands the manager on a stale
   // expectation with nothing left to re-trigger the sync, so retry once —
   // but not for permanently-uninjectable pages (chrome://, extension pages),
-  // where a retry is pure noise.
+  // where a retry is pure noise. The policy is RE-READ per attempt: a reset
+  // or last-override clear can land inside the retry sleep, and a stale rate
+  // with a fresh rev would install a ghost manager resurrecting the choice
+  // the user just reset.
+  let appliedRate = null;
   for (let attempt = 0; attempt < 2; attempt++) {
+    if (!enforcementNeeded()) {
+      await sendToTab(tabId, { type: 'mcp-speed-disconnect' });
+      noteUnmanaged(tabId);
+      return;
+    }
+    const rate = effectiveRate(tabId);
     try {
       // all frames: media can live in embeds; installSpeedManager is idempotent
       await chrome.scripting.executeScript({
@@ -345,6 +376,7 @@ async function rawSyncSpeedTab(tabId, pageUrl, adoptForeign = true) {
         func: installSpeedManager,
         args: [{ rate, adoptForeign, rev: revOf(tabId) }],
       });
+      appliedRate = rate;
       break;
     } catch (e) {
       const msg = String(e?.message ?? e);
@@ -356,9 +388,10 @@ async function rawSyncSpeedTab(tabId, pageUrl, adoptForeign = true) {
       return; // uninjectable tab (chrome://, discarded) — nothing to manage
     }
   }
+  if (appliedRate === null) return; // no attempt succeeded — nothing to apply
   noteManaged(tabId);
   // frames that already had a manager learn the new expectation by message
-  await sendToTab(tabId, { type: 'mcp-speed-apply', rate, rev: revOf(tabId) });
+  await sendToTab(tabId, { type: 'mcp-speed-apply', rate: appliedRate, rev: revOf(tabId) });
   // hosts with a known private player API (YouTube's first-party player) get
   // one MAIN-world sync so their own UI follows the enforced rate: element
   // truth → player API → site UI. Feature-detected and compare-only, so a
@@ -727,7 +760,12 @@ async function routeMessage(msg, sender) {
       const committed = committedDocOf(tabId);
       const url = committed?.url ?? sender.tab?.url ?? (await safeTabUrl(tabId));
       if (url === null) return;
-      if (near(msg.rate, globalSpeed)) {
+      // clamp before use: the report carries an element rate (platform-
+      // bounded), and the clamp keeps the stored override inside the
+      // supported range — a 0-rate element (legal) must not freeze the page
+      // as an override the popup then displays as "1.00×"
+      const rate = clampSpeed(msg.rate);
+      if (near(rate, globalSpeed)) {
         // a native change landing exactly on the global rate is inheritance
         await clearOverride(tabId);
         if (enforcementNeeded()) {
@@ -737,14 +775,14 @@ async function routeMessage(msg, sender) {
         overrides[tabId] = {
           url,
           documentId: committed?.documentId ?? sender.documentId,
-          rate: msg.rate,
+          rate,
           at: Date.now(),
         };
         bumpTabRev(tabId);
         await writeOverrides(overrides);
         // apply, not re-injection: re-running adopt here could re-report the
         // other elements of a multi-rate page and churn the fresh override
-        await sendToTab(tabId, { type: 'mcp-speed-apply', rate: msg.rate, rev: revOf(tabId) });
+        await sendToTab(tabId, { type: 'mcp-speed-apply', rate, rev: revOf(tabId) });
       }
       return;
     }

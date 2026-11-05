@@ -326,6 +326,14 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
         const tab = tabs.get(target.tabId);
         if (!tab) throw new Error('No tab with id');
         if (!tab._injectable) throw new Error('Cannot access contents of this page');
+        // a test-installed one-shot failure (see failNextExecuteScript) —
+        // thrown BEFORE running the function, like the real API
+        const failOnce = chrome._mock._failOnce;
+        if (failOnce && failOnce.tabId === target.tabId) {
+          chrome._mock._failOnce = null;
+          (chrome._mock._failLog ??= []).push({ func: func?.name, msg: failOnce.message });
+          throw new Error(failOnce.message);
+        }
         const before = tab.audible;
         const result = target.allFrames
           ? [{ frameId: 0, result: runIn(tab._doc) }]
@@ -475,6 +483,12 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
       },
       offscreenCreateGate: null,
       tabCaptureGates: new Map(),
+      /** Fail the next executeScript for this tab with this error (once) —
+          the deterministic way to exercise the worker's transient-failure
+          retry classification. */
+      failNextExecuteScript(tabId, message) {
+        this._failOnce = { tabId, message };
+      },
       fireCommand(command) {
         for (const fn of commandHandlers) fn(command);
       },

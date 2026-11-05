@@ -1169,6 +1169,102 @@
       ((await chrome.storage.session.get('speedManaged')).speedManaged ?? []).length === 0,
       'stale managed entries survived the reset fan-out');
 
+    // --- the injection retry re-reads the policy (no ghost manager) -----------
+    // A transient executeScript failure retries after 150 ms. Pre-fix, the
+    // retry reused the rate computed before the sleep: a policy lift landing
+    // inside the window left the retry installing a stale rate with a FRESH
+    // rev — a ghost manager re-stamping the just-reset choice.
+    await chrome.storage.session.set({ recent: [] });
+    await chrome.storage.session.remove('target');
+    await chrome.storage.local.set({ speed: 2 }); // enforcement active
+    await until(async () => ((await chrome.storage.session.get('speedManaged')).speedManaged ?? []).includes(1));
+    const installsBeforeRetry = mock.scriptingCalls.filter(
+      (c) => c.func === 'installSpeedManager' && c.target.tabId === 1 && c.args?.[0]?.rate === 2,
+    ).length;
+    const tab1CallsAtMark = mock.scriptingCalls.filter((c) => c.target.tabId === 1).length;
+    window.__dbgMark = tab1CallsAtMark;
+    mock.failNextExecuteScript(1, 'injection failed transiently');
+    mock.fireUpdated(1, { status: 'complete' }); // sync starts; attempt 0 fails; 150 ms sleep
+    await new Promise((r) => setTimeout(r, 50)); // the lift lands INSIDE the retry sleep
+    await chrome.storage.local.set({ speed: 1 }); // the policy lifts mid-retry
+    await until(async () => (await chrome.storage.local.get('speed')).speed === 1);
+    await new Promise((r) => setTimeout(r, 400)); // the retry wakes inside this window
+    await until(async () => {
+      const m = (await chrome.storage.session.get('speedManaged')).speedManaged ?? [];
+      return !m.includes(1);
+    });
+    const installsAfterRetry = mock.scriptingCalls.filter(
+      (c) => c.func === 'installSpeedManager' && c.target.tabId === 1 && c.args?.[0]?.rate === 2,
+    ).length;
+    // The mock records executeScript calls BEFORE running them, so the
+    // hook-failed attempt 0 appears here as a rate-2 entry that never
+    // installed. Account for recorded failures: any rate-2 entry beyond them
+    // is a real (ghost) install.
+    const newRate2Entries = installsAfterRetry - installsBeforeRetry;
+    const accountedFailures = (chrome._mock._failLog ?? []).length;
+    assert('the injection retry does not install a stale rate after the policy lifted',
+      newRate2Entries <= accountedFailures,
+      `new rate-2 entries=${newRate2Entries}, failed attempts=${accountedFailures} — an unaccounted entry is a ghost install`);
+
+    // --- refreshSpeedState is load-once (no popup-open clobber) ---------------
+    // Simulate the exact post-race state the invariant guards against: storage
+    // holds a STALE snapshot (a slow earlier write lost), while the worker's
+    // in-memory maps hold the newer truth. A wholesale re-read on popup open
+    // would regress the memory; load-once must not.
+    await chrome.storage.local.set({ speed: 2 });
+    await until(async () => ((await chrome.storage.session.get('speedManaged')).speedManaged ?? []).includes(1));
+    mock.fireMessage({ type: 'mcp-speed-page', tabId: 1, rate: 2.5 });
+    await until(async () => {
+      const ov = (await chrome.storage.session.get('speedOverrides')).speedOverrides ?? {};
+      return ov[1]?.rate === 2.5;
+    });
+    // the losing slow write lands late: storage now stale, memory still newer
+    await chrome.storage.session.set({ speedOverrides: {} });
+    const staleApplies = mock.sentTabMessages.filter(
+      (m) => m.tabId === 1 && m.msg.type === 'mcp-speed-apply',
+    ).length;
+    mock.fireMessage({ type: 'mcp-speed-sync' }); // popup open
+    await until(() =>
+      mock.sentTabMessages
+        .slice(staleApplies)
+        .some((m) => m.tabId === 1 && m.msg.type === 'mcp-speed-apply'),
+    );
+    const lastApply = [...mock.sentTabMessages]
+      .reverse()
+      .find((m) => m.tabId === 1 && m.msg.type === 'mcp-speed-apply');
+    assert('a warm popup-open sync applies the in-memory override, not the stale storage snapshot',
+      lastApply?.msg?.rate === 2.5,
+      `lastApply=${JSON.stringify(lastApply?.msg)} (memory clobbered by the stale read)`);
+    await chrome.storage.local.set({ speed: 1 });
+    await until(async () => ((await chrome.storage.session.get('speedManaged')).speedManaged ?? []).length === 0);
+
+    // --- the recent list serializes concurrent read-modify-writes -------------
+    await chrome.storage.session.set({ recent: [] });
+    mock.fireUpdated(1, { audible: true });
+    mock.fireUpdated(4, { audible: true }); // same tick: both must survive
+    const bothRecent = await until(async () => {
+      const r = (await chrome.storage.session.get('recent')).recent ?? [];
+      return r.includes(1) && r.includes(4);
+    });
+    assert('concurrent audible events both land in the recent list',
+      bothRecent === true,
+      `recent=${JSON.stringify((await chrome.storage.session.get('recent')).recent)}`);
+
+    // --- adopted report rates are clamped -------------------------------------
+    await chrome.storage.local.set({ speed: 2 });
+    await until(async () => ((await chrome.storage.session.get('speedManaged')).speedManaged ?? []).includes(1));
+    mock.fireMessageFromTab({ type: 'mcp-speed-report', rate: 0, rev: await curRev(1) }, 1);
+    await until(async () => {
+      const ov = (await chrome.storage.session.get('speedOverrides')).speedOverrides ?? {};
+      return !!ov[1];
+    });
+    const clamped = (await chrome.storage.session.get('speedOverrides')).speedOverrides?.[1];
+    assert('a page-reported rate is clamped to the supported range (0 -> 0.25×)',
+      clamped?.rate === 0.25,
+      `override=${JSON.stringify(clamped)}`);
+    await chrome.storage.local.set({ speed: 1 });
+    await until(async () => ((await chrome.storage.session.get('speedManaged')).speedManaged ?? []).length === 0);
+
     // --- report ------------------------------------------------------------------
     for (const { name, ok, detail } of results) {
       const div = document.createElement('div');
