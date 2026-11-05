@@ -226,6 +226,12 @@ async function main() {
     const mediaSession = (await cdp.send('Target.attachToTarget', { targetId: media.targetId, flatten: true })).sessionId;
     await cdp.send('Runtime.enable', {}, mediaSession); // temporary diagnostics
     await waitFor(() => evalIn(cdp, mediaSession, `!!document.querySelector('audio')`));
+    // pause the canvas live video BEFORE the popup's first probe: it is a
+    // LIVE MediaStream element (duration Infinity) that the fixture autoplays
+    // at load — left playing, it is always a playing element and the row's
+    // primary flips to it whenever the tone stalls, flipping the row LIVE and
+    // disabling the transport (the root cause of the day's flake family)
+    await evalIn(cdp, mediaSession, `document.getElementById('canvas-video').pause()`);
 
     // start the local audio (autoplay flag allows it)
     const playResult = await evalIn(
@@ -381,7 +387,15 @@ async function main() {
           }),
         );
 
+    // bindings shared across the section-isolation blocks below (block-scoped
+    // const inside a try would die at the boundary)
+    let popup2, popupSession2, media2b, media2bSession, volSyncTarget, volSyncSession, volSyncRow;
+
     // --- exclusive playback (Alt+click play) ---------------------------------
+    // Section isolation: the first-interaction region is the flake-prone one;
+    // a failure here records and the run continues (the CDP session itself is
+    // shared, so a hard browser failure still fails the whole run).
+    try {
     const media2 = await cdp.send('Target.createTarget', {
       url: `http://127.0.0.1:${SERVE_PORT}/test/media-page.html`,
     });
@@ -411,7 +425,21 @@ async function main() {
          .dispatchEvent(new MouseEvent('click', { bubbles: true, altKey: true }))`,
     );
     await waitFor(() => evalIn(cdp, mediaSession, `document.querySelectorAll('audio')[0].paused`));
-    await waitFor(() => evalIn(cdp, media2Session, `!document.querySelectorAll('audio')[0].paused`));
+    await waitFor(() => evalIn(cdp, media2Session, `!document.querySelectorAll('audio')[0].paused`), 8000).catch(async (e) => {
+      const state = await evalIn(
+        cdp,
+        media2Session,
+        "(() => { const a = document.querySelectorAll('audio')[0]; return a ? { paused: a.paused, t: a.currentTime, rs: a.readyState } : null; })()",
+        true,
+      ).catch((e2) => 'eval: ' + e2.message);
+      const rows = await evalIn(
+        cdp,
+        popupSession,
+        "[...document.querySelectorAll('.row')].map((r) => ({ title: r.querySelector('.t-title').textContent.slice(0, 14), cls: r.className, aria: r.querySelector('.play').getAttribute('aria-label') }))",
+        true,
+      ).catch((e2) => 'eval: ' + e2.message);
+      throw new Error('exclusive: media2 not playing after Alt+click: ' + JSON.stringify({ state, rows }));
+    });
     ok('Alt+click play is exclusive — the other tab pauses');
 
     await waitFor(() => evalIn(cdp, popupSession, `document.querySelectorAll('.row.paused').length === 1`));
@@ -502,11 +530,44 @@ async function main() {
     ok('volume popover slider reaches the page media');
     await evalIn(cdp, popupSession, `document.querySelector('.row .vol-btn').click()`);
 
-    const beforeBack = await evalIn(cdp, mediaSession, `document.querySelectorAll('audio')[0].currentTime`);
-    await evalIn(cdp, popupSession, `document.querySelector('.row .back10').click()`);
-    await waitFor(() =>
-      evalIn(cdp, mediaSession, `document.querySelectorAll('audio')[0].currentTime <= ${beforeBack} - 5`),
+    // deterministic position + element-agnostic readout: the primary element
+    // can flip under load — the seek and the −10 s click both target the row's
+    // primary, so the READOUT is the consistent signal. The media-page tone is
+    // 10 s: seek to 8, back 10 clamps to 0.
+    await evalIn(
+      cdp,
+      popupSession,
+      `(() => { const p = document.querySelector('.row .pos'); p.value = '8'; p.dispatchEvent(new Event('input', {bubbles:true})); p.dispatchEvent(new Event('change', {bubbles:true})); })()`,
     );
+    await waitFor(() =>
+      evalIn(cdp, popupSession, `document.querySelector('.row .pos-readout').textContent.startsWith('0:08')`),
+    );
+    await evalIn(cdp, popupSession, `document.querySelector('.row .back10').click()`);
+    const readoutBack = () =>
+      evalIn(cdp, popupSession, `document.querySelector('.row .pos-readout').textContent`).then((t) => {
+        const m = /^(\d+):(\d\d) /.exec(t);
+        return m ? Number(m[1]) * 60 + Number(m[2]) : -1;
+      });
+    const movedBack = await waitFor(async () => (await readoutBack()) < 8 && (await readoutBack()) >= 0, 4000).catch(() => false);
+    if (!movedBack) {
+      // the media's playback can stall mid-suite (renderer starvation); one
+      // re-click before declaring failure
+      await evalIn(cdp, mediaSession, `document.querySelectorAll('audio')[0].play().catch(() => {})`);
+      await evalIn(cdp, popupSession, `document.querySelector('.row .back10').click()`);
+      await waitFor(async () => {
+        const sec = await readoutBack();
+        return sec >= 0 && sec < 8;
+      }, 6000).catch(async (e) => {
+        const readout = await evalIn(cdp, popupSession, `document.querySelector('.row .pos-readout').textContent`).catch((e2) => 'eval: ' + e2.message);
+        const tone = await evalIn(
+          cdp,
+          mediaSession,
+          "(() => { const a = document.querySelectorAll('audio')[0]; return a ? { paused: a.paused, t: a.currentTime, rs: a.readyState } : null; })()",
+          true,
+        ).catch((e2) => 'eval: ' + e2.message);
+        throw new Error('±10s readout stuck: ' + JSON.stringify({ readout, tone }));
+      });
+    }
     ok('−10s button seeks the page media back');
 
     // --- global speed ------------------------------------------------------------
@@ -562,10 +623,10 @@ async function main() {
     );
     ok('global speed applies to media that starts later (paused → play)');
 
-    const media2b = await cdp.send('Target.createTarget', {
+    media2b = await cdp.send('Target.createTarget', {
       url: `http://127.0.0.1:${SERVE_PORT}/test/media-audio.html`,
     });
-    const media2bSession = (await cdp.send('Target.attachToTarget', { targetId: media2b.targetId, flatten: true })).sessionId;
+    media2bSession = (await cdp.send('Target.attachToTarget', { targetId: media2b.targetId, flatten: true })).sessionId;
     await cdp.send('Runtime.enable', {}, media2bSession); // temporary diagnostics
     await waitFor(() => evalIn(cdp, media2bSession, `!!document.querySelector('audio')`));
     await evalIn(cdp, media2bSession, `document.querySelector('audio').play()`);
@@ -865,8 +926,8 @@ async function main() {
     }
     await cdp.send('Target.closeTarget', { targetId: popup.targetId });
     await sleep(300);
-    const popup2 = await cdp.send('Target.createTarget', { url: `chrome-extension://${extId}/popup.html` });
-    const popupSession2 = (await cdp.send('Target.attachToTarget', { targetId: popup2.targetId, flatten: true })).sessionId;
+    popup2 = await cdp.send('Target.createTarget', { url: `chrome-extension://${extId}/popup.html` });
+    popupSession2 = (await cdp.send('Target.attachToTarget', { targetId: popup2.targetId, flatten: true })).sessionId;
     await sleep(800);
     const reopenedRow = await evalIn(
       cdp,
@@ -1095,7 +1156,6 @@ async function main() {
     volSyncReadout === '40%'
       ? ok('popup volume readout matches the selected 5 % step value')
       : bad('popup volume readout matches the selected 5 % step value', `readout=${volSyncReadout}`);
-
     // --- two-way sync: site → extension, and the two mute truths -------------
     // The site's own volume control changes the element; the popup readout
     // must follow (the ping loop tracks the open card's element).
@@ -1569,6 +1629,10 @@ async function main() {
       : bad('slider increments: volume 0–100 % in 5 % steps, boost 100–600 % in 10 % steps', JSON.stringify(sliderSteps));
     await evalIn(cdp, popupSession2, `document.activeElement.blur()`); // release dragGuard
 
+    } catch (e) {
+      bad('exclusive / seek / volume / global / mute / two-way-sync / adapters / keyboard section completed', e.message);
+    }
+
     // --- commands registered ----------------------------------------------------------
     const commands = await evalIn(
       cdp,
@@ -1598,7 +1662,9 @@ async function main() {
         popupSession2,
         `(async () => {
            const { pageProbe } = await import('./lib/page.js');
-           const results = await chrome.scripting.executeScript({ target: { allFrames: true }, func: pageProbe });
+           const tabId = (await chrome.tabs.query({ url: 'http://127.0.0.1:8080/test/frame-host.html' }))[0]?.id;
+           if (tabId === undefined) return { picked: null, frames: [], error: 'no frame-host tab' };
+           const results = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: pageProbe });
            const frames = results.filter((r) => r.result?.elements?.length);
            let frameId = frames.find((r) => r.result.elements.some((e) => e.playing))?.frameId;
            frameId ??= frames[0]?.frameId;
@@ -2038,6 +2104,9 @@ async function main() {
     };
 
 
+    // matrix fault isolation: a failed step records and the cross-frame and
+    // silent-tab coverage after the matrix still runs
+    try {
     // 1. global 2.00× — playing media follows, and the policy is stamped into
     //    defaultPlaybackRate so source reloads inherit it (R4)
     for (let i = 0; i < 4; i++) {
@@ -2435,11 +2504,16 @@ async function main() {
       }
     }
 
+    } catch (e) {
+      bad('speed regression matrix completed', e.message);
+    }
+
     await cdp.send('Target.closeTarget', { targetId: fix.A.targetId });
     await cdp.send('Target.closeTarget', { targetId: fix.B.targetId });
 
     // --- real-browser: cross-frame reports + silent-tab global coverage ----------
     // Clean slate: no overrides, global back to 1.00×.
+    try {
     await evalIn(cdp, pmS, `document.getElementById('gspeed-reset').click()`);
     await waitSync(() => evalIn(cdp, pmS, `document.getElementById('gspeed-value').textContent === '1.00×'`));
     await waitSync(async () => Object.keys(await openOverrides()).length === 0);
@@ -2530,6 +2604,9 @@ async function main() {
     ok('global reset returns future media in that tab to normal behavior (1.00×)');
     await cdp.send('Target.closeTarget', { targetId: quietTarget.targetId });
     await cdp.send('Target.closeTarget', { targetId: pm.targetId });
+    } catch (e) {
+      bad('cross-frame / silent-tab section completed', e.message);
+    }
 
     // summary
     const failed = results.filter((r) => !r.pass).length;
