@@ -17,15 +17,28 @@ Tested browser
   Optional secondary: Microsoft Edge — MCP_BROWSER=edge selects it in the rigs.
 
 Implementation baseline tested
-  Commit 8d9fe6c ("test: verify the suites in Google Chrome; capture the real
-  action popup"). This documentation pass is a separate commit on top; it does
-  not change extension behavior.
+  The improve-skill backlog (plans/001-020): 20 audited improvements —
+  boost cold-start gating, detached-media pruning, popover inertness,
+  no-policy disconnects, boost-belt fairness, popup-state reliability,
+  background-state hardening, static contract checks, the YouTube
+  clamp-report loop, nested shadow roots, phantom-playing recovery,
+  scan/injection performance, fan-out coalescing, test-rig robustness
+  and fidelity, docs reconciliation, serve hardening, constant
+  consolidation, pause consolidation, and two investigations. Final
+  commit of this status: see git log.
 
-Verification at the baseline (2026-11-04)
-  npm test                 passed (static checks, no browser)
-  npm run harness          passed — 79 background assertions + popup mock
-  npm run e2e              122/122 in Google Chrome 156.0.8078.76
-  npm run youtube-check    13/13 in Google Chrome 156.0.8078.76, real youtube.com
+Verification of the backlog (2026-11-06, Google Chrome 156.0.8078.80)
+  npm test                 passed (static checks incl. the new contract
+                           checks: injected-function scope walk, inline-copy
+                           drift guard, message/storage-key contract table)
+  npm run harness          passed — 100 background assertions + 12 restart
+                           scenarios + popup mock (all three mock pages)
+  npm run e2e              132/132 in Google Chrome 156.0.8078.80 (headless)
+  npm run e2e:headed       implemented; the active-boost capture assertions
+                           run only if the build grants capture to the
+                           CDP-opened popup (the toolbar-click grant remains
+                           manual — CHECKLIST #59d)
+  npm run youtube-check    13/13 in Google Chrome 156.0.8078.80, real youtube.com
   npm run verify-capture   ran; records the browser's activeTab refusal
                            (see the manual check below)
   The test rigs default to Chrome; branded Chrome 137+ ignores
