@@ -1548,6 +1548,43 @@ async function main() {
     commands.includes('toggle-target') && commands.includes('pause-all') && commands.includes('mute-all')
       ? ok(`keyboard commands registered (${commands})`)
       : bad('keyboard commands registered', commands);
+
+    // toggle-target frame selection (handler-logic parity): the keyboard
+    // command's probe-then-pick must find the frame that owns the PLAYING
+    // media. The command itself cannot be dispatched over CDP, so the same
+    // probe + pick expression the handler runs is evaluated here against a
+    // frame-host page whose playing element lives in the iframe.
+    {
+      const ttTarget = await cdp.send('Target.createTarget', {
+        url: `http://127.0.0.1:${SERVE_PORT}/test/frame-host.html`,
+      });
+      const ttSession = (await cdp.send('Target.attachToTarget', { targetId: ttTarget.targetId, flatten: true })).sessionId;
+      await waitFor(() => evalIn(cdp, ttSession, `!!(window.mcpFrame && window.mcpFrame())`), 15000);
+      await evalIn(cdp, ttSession, `document.querySelectorAll('audio')[0].pause()`);
+      await evalIn(cdp, ttSession, `(async () => { await mcpFrame().play(0); })()`, true);
+      const picked = await evalIn(
+        cdp,
+        popupSession2,
+        `(async () => {
+           const { pageProbe } = await import('${EXT_URL}/lib/page.js');
+           const results = await chrome.scripting.executeScript({ target: { allFrames: true }, func: pageProbe });
+           const frames = results.filter((r) => r.result?.elements?.length);
+           let frameId = frames.find((r) => r.result.elements.some((e) => e.playing))?.frameId;
+           frameId ??= frames[0]?.frameId;
+           return { picked: frameId ?? null, frames: frames.map((r) => ({ frameId: r.frameId, playing: r.result.elements.filter((e) => e.playing).length })) };
+         })()`,
+        true,
+      );
+      const playingFrames = (picked?.frames ?? []).filter((f) => f.playing > 0);
+      picked?.picked !== null &&
+        playingFrames.length === 1 &&
+        picked.picked === playingFrames[0].frameId &&
+        picked.picked !== 0
+        ? ok("toggle-target frame selection picks the playing media's frame (handler-logic parity)")
+        : bad("toggle-target frame selection picks the playing media's frame (handler-logic parity)", JSON.stringify(picked));
+      await cdp.send('Target.closeTarget', { targetId: ttTarget.targetId });
+    }
+
     // --- volume boost (plumbing) ---------------------------------------------------------
     // Truth-first: whatever this browser allows, the UI must never show a
     // state the pipeline does not have. Capture audibility itself is a manual
