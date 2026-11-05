@@ -268,9 +268,24 @@ async function clearOverride(tabId, resync = true) {
     bumpTabRev(tabId);
     await writeOverrides(overrides);
   }
-  if (resync && !enforcementNeeded()) {
-    await sendToTab(tabId, { type: 'mcp-speed-disconnect' });
+  if (!enforcementNeeded()) {
+    // the policy just lifted: EVERY previously managed tab must tear its
+    // manager down (DESIGN.md: "Disconnected everywhere when no policy
+    // remains") — a lingering manager keeps stamping media and adopting
+    // page rates as overrides, and the stamped defaultPlaybackRate survives
+    // the policy lift. Sends are direct, never queued: callers include the
+    // queued sync itself, and queueSpeedSync from inside a queued run would
+    // deadlock the chain. A disconnect to a tab without a manager no-ops.
+    const targets = await speedSyncTargets();
+    for (const tid of targets) {
+      await sendToTab(tid, { type: 'mcp-speed-disconnect' });
+      noteUnmanaged(tid);
+    }
+    return;
   }
+  // resync is retained for signature compatibility: the callers re-apply
+  // the policy themselves via syncSpeedTab when enforcement is still needed
+  void resync;
 }
 
 /**
