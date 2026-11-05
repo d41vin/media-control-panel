@@ -1376,18 +1376,27 @@ async function main() {
 
     // --- keyboard vs sliders -----------------------------------------------------------
     // A focused range slider owns all four arrows. Real key events via CDP so
-    // the input's native adjustment actually runs.
+    // the input's native adjustment actually runs. The volume slider is only
+    // reachable while its popover is OPEN (closed popovers are inert —
+    // intentionally, so invisible controls are not focusable); opening it is
+    // the real user path and focuses the slider natively. The value is
+    // written through a proper input+change so the commit lands on the
+    // element and no ping rewrites the slider between write and key.
     await evalIn(
       cdp,
       popupSession2,
-      `(() => {
+      `(async () => {
         const r = document.querySelector('.row');
-        // no popover here: an open volume popover tracks the live element
-        // value and would rewrite the slider between this write and the key
+        r.querySelector('.vol-btn').click();
+        await new Promise((res) => setTimeout(res, 250)); // popover opens, fresh ping lands
         const v = r.querySelector('.vol');
         v.value = '0.5';
+        v.dispatchEvent(new Event('input', { bubbles: true }));
+        v.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((res) => setTimeout(res, 300)); // commit → element 0.5
         v.focus();
       })()`,
+      true,
     );
     const pressArrow = (key, vk) =>
       cdp.send(
