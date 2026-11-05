@@ -263,6 +263,8 @@ async function main() {
       cdp,
       pmSession,
       `(async () => {
+         // every popover starts collapsed → inert from creation
+         const initialInert = [...document.querySelectorAll('.popover')].every((p) => p.hasAttribute('inert'));
          document.getElementById('gspeed-inc').click();
          await new Promise((r) => setTimeout(r, 150));
          const rows = [...document.querySelectorAll('.row')];
@@ -327,6 +329,19 @@ async function main() {
          audioTruths.playerSyncWired = chrome._mock.scriptingCalls.some(
            (c) => c.func === 'ytSyncPlayer' && c.world === 'MAIN' && c.target.tabId === 1,
          );
+         // closed popovers are inert (out of the tab order and the a11y
+         // tree); the open one is interactive; click-away re-inerts all
+         const popInert = (() => {
+           const pops = [...document.querySelectorAll('.popover')];
+           const openPop = pops.find((p) => p.classList.contains('open'));
+           const openOk =
+             !!openPop &&
+             !openPop.hasAttribute('inert') &&
+             pops.filter((p) => p !== openPop).every((p) => p.hasAttribute('inert'));
+           document.body.click();
+           const closedOk = pops.every((p) => p.hasAttribute('inert'));
+           return { openOk, closedOk, initialInert };
+         })();
          return {
            rows: rows.length,
            gspeed: document.getElementById('gspeed-value').textContent,
@@ -336,6 +351,7 @@ async function main() {
            boostStep,
            mute,
            audioTruths,
+           popInert,
          };
        })()`,
       true,
@@ -367,16 +383,20 @@ async function main() {
       t?.playerRestored === 'Unmuted' &&
       t?.elementRestored === false &&
       t?.playerSyncWired === true;
+    const popInertOk =
+      pmState?.popInert?.initialInert === true &&
+      pmState.popInert.openOk === true &&
+      pmState.popInert.closedOk === true;
     if (cdp.pageErrors.length) {
       failed = true;
       for (const e of cdp.pageErrors) console.error(`FAIL  popup-mock page error: ${e}`);
     } else if (pmRows < 1 || !pmState.gspeed.startsWith('1.25')) {
       failed = true;
       console.error(`FAIL  popup-mock smoke: rows=${pmRows} state=${JSON.stringify(pmState)}`);
-    } else if (!themeOk || !stepsOk || !muteOk || !audioTruthsOk) {
+    } else if (!themeOk || !stepsOk || !muteOk || !audioTruthsOk || !popInertOk) {
       failed = true;
       console.error(
-        `FAIL  popup-mock behavior: theme=${themeOk} steps=${stepsOk} mute=${muteOk} audioTruths=${audioTruthsOk} state=${JSON.stringify(pmState)}`,
+        `FAIL  popup-mock behavior: theme=${themeOk} steps=${stepsOk} mute=${muteOk} audioTruths=${audioTruthsOk} popInert=${popInertOk} state=${JSON.stringify(pmState)}`,
       );
     } else {
       console.log(`  ok  popup-mock smoke: ${pmRows} row(s), global ${pmState.gspeed}, override shown: ${pmState.overridden}`);
@@ -385,6 +405,7 @@ async function main() {
       );
       console.log('  ok  popup-mock quick mute stays muted for 3.3 s (browser + UI)');
       console.log('  ok  popup-mock volume popover: tab audio and player audio independent, player toggle writes the element');
+      console.log('  ok  popup-mock popovers: collapsed popovers are inert, the open one interactive, click-away re-inerts');
     }
 
     if (failed) process.exitCode = 1;

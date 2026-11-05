@@ -758,10 +758,12 @@ button {
 .popover {
   max-height: 0;
   opacity: 0;
+  visibility: hidden;
   overflow: hidden;
   margin-top: 0;
   border-top: 0 solid var(--hairline);
-  transition: max-height 150ms ease-out, opacity 150ms ease-out, margin-top 150ms ease-out;
+  transition: max-height 150ms ease-out, opacity 150ms ease-out, margin-top 150ms ease-out,
+    visibility 0s 150ms;
 }
 
 .popover.open {
@@ -770,6 +772,9 @@ button {
   margin-top: 8px;
   border-top-width: 1px;
   padding-top: 8px;
+  visibility: visible;
+  transition: max-height 150ms ease-out, opacity 150ms ease-out, margin-top 150ms ease-out,
+    visibility 0s 0s;
 }
 
 .vol-pop.open {

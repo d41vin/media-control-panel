@@ -405,6 +405,11 @@ function makeRow(tab) {
   closeBtn.append(icon('close'), el('span', 'menu-label', 'Close tab'));
   menuPop.append(pinBtn, tabBtn, closeBtn);
 
+  // popovers start collapsed — inert from creation, like the closed settings
+  volPop.toggleAttribute('inert', true);
+  boostPop.toggleAttribute('inert', true);
+  menuPop.toggleAttribute('inert', true);
+
   card.append(head, progress, controls, volPop, boostPop, menuPop);
   li.append(card);
   listEl.append(li);
@@ -673,6 +678,11 @@ function syncPopover(rec) {
   n.volPop.classList.toggle('open', rec.openPopover === 'vol');
   n.boostPop.classList.toggle('open', rec.openPopover === 'boost');
   n.menuPop.classList.toggle('open', rec.openPopover === 'menu');
+  // collapsed popovers are invisible: their controls must leave the tab
+  // order and the accessibility tree, exactly like the closed settings panel
+  n.volPop.toggleAttribute('inert', rec.openPopover !== 'vol');
+  n.boostPop.toggleAttribute('inert', rec.openPopover !== 'boost');
+  n.menuPop.toggleAttribute('inert', rec.openPopover !== 'menu');
   n.volBtn.setAttribute('aria-expanded', String(rec.openPopover === 'vol'));
   n.boostBtn.setAttribute('aria-expanded', String(rec.openPopover === 'boost'));
   n.menuBtn.setAttribute('aria-expanded', String(rec.openPopover === 'menu'));
