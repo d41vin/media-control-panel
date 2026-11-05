@@ -2149,6 +2149,42 @@ async function main() {
     // deterministic in the background mock — the real page cannot forge a
     // superseded-revision report.
 
+    // 17. detached media is pruned: a site's cleanup write to a discarded
+    //     element must not be adopted as a page choice, a global change must
+    //     not re-stamp it, and reattachment re-governs it (matrix #17)
+    {
+      const detIdx = await evalIn(
+        cdp, fix.A.session,
+        `(async () => { const i = mcpFix.newMedia(); await mcpFix.play(i); return i; })()`,
+        true,
+      );
+      await waitSync(() => evalIn(cdp, fix.A.session, `Math.abs(mcpFix.rates()[${detIdx}] - 2.75) < 0.01`));
+      await evalIn(cdp, fix.A.session, `mcpFix.detach(${detIdx})`);
+      // a site discarding an old player typically writes its cleanup rate
+      await evalIn(cdp, fix.A.session, `mcpFix.rate(${detIdx}, 1)`);
+      await sleep(1500); // any report from the dead element would have landed
+      const ovAfterDetachedWrite = await openOverrides();
+      const aOverrideIntact = Object.values(ovAfterDetachedWrite).some(
+        (o) => (o.url || '').includes('speed-suite.html') && Math.abs(o.rate - 2.75) < 1e-9,
+      );
+      const noBogusOverride = !Object.values(ovAfterDetachedWrite).some((o) => Math.abs(o.rate - 1) < 1e-9);
+      aOverrideIntact && noBogusOverride
+        ? ok('speed-matrix 17a: a cleanup write to detached media is not adopted (override intact)')
+        : bad('speed-matrix 17a: a cleanup write to detached media is not adopted (override intact)',
+            `ov=${JSON.stringify(ovAfterDetachedWrite)}`);
+      // a global change re-stamps only CONNECTED elements (applyAll prunes)
+      await evalIn(cdp, pmS, `document.getElementById('gspeed-inc').click()`);
+      await waitSync(() => evalIn(cdp, fix.A.session, `Math.abs(mcpFix.rates()[0] - 2.75) < 0.01`));
+      const detachedRate = await evalIn(cdp, fix.A.session, `mcpFix.rates()[${detIdx}]`, true);
+      Math.abs(detachedRate - 1) < 0.01
+        ? ok('speed-matrix 17b: detached media is not re-stamped by a global change (stays at 1.00×)')
+        : bad('speed-matrix 17b: detached media is not re-stamped by a global change (stays at 1.00×)', `rate=${detachedRate}`);
+      // reattachment re-governs: the re-inserted element is adopted/stamped
+      await evalIn(cdp, fix.A.session, `mcpFix.reattach(${detIdx})`);
+      await waitSync(() => evalIn(cdp, fix.A.session, `Math.abs(mcpFix.rates()[${detIdx}] - 2.75) < 0.01`), 10000);
+      ok('speed-matrix 17c: reattached media is governed again (2.75×)');
+    }
+
     await cdp.send('Target.closeTarget', { targetId: fix.A.targetId });
     await cdp.send('Target.closeTarget', { targetId: fix.B.targetId });
 

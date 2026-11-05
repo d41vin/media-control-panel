@@ -163,6 +163,9 @@ export function installSpeedManager(init) {
   };
 
   S.applyAll = () => {
+    // replaced SPA elements leave detached nodes behind: drop them so dead
+    // elements cannot be stamped and their writes cannot report
+    S.list = S.list.filter((el) => el.isConnected);
     for (const el of S.list) applyTo(el);
   };
 
@@ -194,6 +197,10 @@ export function installSpeedManager(init) {
 
   const onRateChange = (e) => {
     const el = e.target;
+    // a discarded element's write is site cleanup, not a page choice: at
+    // global 1.00× it would read as inheritance and DELETE the page's
+    // override, at any other rate it would create a bogus one
+    if (!el.isConnected) return;
     const credits = echoCredits.get(el) ?? 0;
     if (credits > 0) {
       const sent = sentRates.get(el) ?? [];
@@ -215,8 +222,10 @@ export function installSpeedManager(init) {
   };
 
   const onPlay = (e) => {
-    touch(e.target);
-    adopt(e.target);
+    const el = e.target;
+    if (!el.isConnected) return; // detached: nothing to adopt or touch
+    touch(el);
+    adopt(el);
   };
 
   // Load lifecycle: each event re-opens the settle window and re-stamps the
@@ -242,6 +251,9 @@ export function installSpeedManager(init) {
   };
 
   const scan = () => {
+    // replaced SPA elements leave detached nodes behind: prune them so the
+    // list cannot grow without bound while a policy stays active
+    S.list = S.list.filter((el) => el.isConnected);
     for (const el of collect()) attach(el);
   };
 
@@ -312,6 +324,7 @@ export function installSpeedManager(init) {
     S.observer?.disconnect();
     if (S.handler) chrome.runtime.onMessage.removeListener(S.handler);
     delete window.__mcpSpeed;
+    S.list.length = 0; // hygiene: drop the strong references immediately
   }
 
   return { managed: S.list.length, expected: S.expected };

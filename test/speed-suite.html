@@ -89,6 +89,15 @@
           els[i].remove();
           els.splice(i, 1);
         },
+        // detach WITHOUT losing the handle: a site discarding an old player
+        // often writes a cleanup rate to the detached node afterwards
+        detach(i) {
+          els[i].pause();
+          els[i].remove();
+        },
+        reattach(i) {
+          document.body.append(els[i]);
+        },
         pushState(u) {
           history.pushState({}, '', u);
         },
