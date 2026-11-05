@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Media Control — background cold-start/restart harness</title>
+  <style>
+    body { font: 13px/1.6 system-ui, sans-serif; max-width: 720px; margin: 24px auto; padding: 0 16px; }
+    pre { background: #f4f4f4; padding: 12px; border: 1px solid #ddd; white-space: pre-wrap; }
+    .pass { color: #060; }
+    .fail { color: #c00; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>Background worker — cold-start / restart harness</h1>
+  <p>
+    A fresh module instance per page load, with <code>storage.session</code>
+    pre-seeded — this is how a worker RESTART is simulated (a page cannot
+    re-import a module with fresh state). Scenario comes from the query
+    string: <code>?scenario=cold-race</code>, or
+    <code>?scenario=restart-reconcile&amp;doc=1|0</code>.
+  </p>
+  <div id="out"></div>
+
+  <script type="module">
+    import { installMockChrome } from './mock-chrome.js';
+    // the extension sits in extension/ (repo) or at the archive root
+    // (packaged archive, manifest at the root) — resolve once, then import
+    const extBase = (await fetch('../extension/manifest.json').catch(() => null))?.ok
+      ? '../extension/'
+      : '../';
+    const params = new URLSearchParams(location.search);
+    const scenario = params.get('scenario') ?? 'cold-race';
+    const docLive = params.get('doc') === '1';
+
+    // seeded persisted boost state: tab 7 active (live pipeline), tab 8
+    // pending (a start that the fresh worker cannot know about)
+    const seedBoosts = { 7: { gain: 250, state: 'active' }, 8: { gain: 150, state: 'pending' } };
+    const chrome = installMockChrome({ sessionSeed: { boosts: seedBoosts } });
+    const mock = chrome._mock;
+    // B5: the offscreen document outlives worker sleeps — a live document
+    // exists when the (re)started worker wakes
+    if (docLive || scenario === 'cold-race') chrome.offscreen._created = 1;
+
+    // For the cold-race scenario the gate must be armed BEFORE the worker
+    // module loads: the mock's storage is instantaneous, so on its own the
+    // startup IIFE drains in microtasks during module evaluation and there is
+    // no cold window at all. With reads gated, the IIFE parks at its first
+    // storage read and the fired message is provably delivered INSIDE the
+    // cold-start window (before refreshBoosts completes).
+    if (scenario === 'cold-race') {
+      chrome._mock.storageGetGate = new Promise((r) => { chrome._mock.releaseStorageGetGate = r; });
+    }
+
+    const out = document.getElementById('out');
+    const results = [];
+    const assert = (name, ok, detail) => {
+      document.title = 'AT: ' + name;
+      results.push({ name, ok, detail });
+    };
+    const until = async (fn, ms = 5000) => {
+      const t0 = Date.now();
+      for (;;) {
+        try { if (await fn()) return true; } catch { /* keep polling */ }
+        if (Date.now() - t0 > ms) return false;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+    };
+    const getBoosts = async () => {
+      const s = await chrome.storage.session.get('boosts');
+      return s.boosts && typeof s.boosts === 'object' ? s.boosts : {};
+    };
+
+    try {
+      // repo layout: ../extension/background.js — packaged archive: ../background.js
+      await import(extBase + 'background.js');
+    } catch (e) {
+      const div = document.createElement('div');
+      div.className = 'fail';
+      div.textContent = 'IMPORT ERROR: ' + (e?.stack ?? e?.message ?? String(e));
+      out.append(div);
+      document.title = 'FAILED (1) — background restart harness';
+    }
+
+    if (scenario === 'cold-race') {
+      // --- scenario A: a boost event wakes a COLD worker -------------------
+      // The IIFE is parked at its first gated read; deliver the message now,
+      // let it run to its own gate (with the fix) or act on the empty map
+      // (pre-fix), then release and assert the outcome.
+      mock.fireMessage({ type: 'mcp-boost-ended', tabId: 8 });
+      await new Promise((r) => setTimeout(r, 50));
+      chrome._mock.releaseStorageGetGate();
+      chrome._mock.storageGetGate = null;
+
+      // the ended entry converges (deleted by the handler)
+      const converged = await until(async () => !((await getBoosts())[8]), 5000);
+      assert('cold-race: the ended entry is processed', converged, 'boosts never converged');
+
+      const b = await getBoosts();
+      assert('cold-race: another tab\'s ACTIVE boost survives the cold event',
+        b[7]?.state === 'active' && b[7]?.gain === 250,
+        `boosts=${JSON.stringify(b)}`);
+      assert('cold-race: the offscreen document is NOT closed while tab 7 is live',
+        chrome.offscreen._closed === 0,
+        `created=${chrome.offscreen._created} closed=${chrome.offscreen._closed}`);
+
+      // sanity: the normal close path still works once nothing is live
+      mock.fireMessage({ type: 'mcp-boost-ended', tabId: 7 });
+      await until(async () => chrome.offscreen._closed === 1, 5000);
+      assert('cold-race: idle close still releases the document when nothing is live',
+        chrome.offscreen._closed === 1,
+        `created=${chrome.offscreen._created} closed=${chrome.offscreen._closed}`);
+      const after = await getBoosts();
+      assert('cold-race: state is empty after the last pipeline ends',
+        Object.keys(after).length === 0, `boosts=${JSON.stringify(after)}`);
+    } else {
+      // --- scenario B: reconcileBoosts(startup) on a fresh worker ----------
+      // A fresh worker cannot have an in-flight request, so a persisted
+      // 'pending' entry is orphaned by definition and must converge to a
+      // truthful error; an 'active' entry survives only while the offscreen
+      // document actually exists (B5).
+      const settled = await until(async () => {
+        const b = await getBoosts();
+        if (docLive) return b[8]?.state === 'error';
+        return Object.keys(b).length === 0;
+      }, 5000);
+      assert(`restart(doc=${docLive ? 1 : 0}): reconciliation converges`, settled, 'state never settled');
+
+      const b = await getBoosts();
+      if (docLive) {
+        assert('restart(doc=1): the active pipeline is kept (document exists)',
+          b[7]?.state === 'active' && b[7]?.gain === 250, `boosts=${JSON.stringify(b)}`);
+        assert('restart(doc=1): the orphaned pending start converges to a truthful error',
+          b[8]?.state === 'error' && b[8]?.error === 'Capture did not start',
+          `boosts=${JSON.stringify(b)}`);
+        assert('restart(doc=1): the document is kept while a pipeline is live',
+          chrome.offscreen._closed === 0,
+          `created=${chrome.offscreen._created} closed=${chrome.offscreen._closed}`);
+      } else {
+        assert('restart(doc=0): nothing survives pretending capture was restored',
+          Object.keys(b).length === 0, `boosts=${JSON.stringify(b)}`);
+        assert('restart(doc=0): no document exists to close',
+          (await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] })).length === 0);
+      }
+    }
+
+    // --- report (same contract the runner expects from background-mock) -----
+    for (const { name, ok, detail } of results) {
+      const div = document.createElement('div');
+      div.className = ok ? 'pass' : 'fail';
+      div.textContent = `${ok ? 'PASS' : 'FAIL'}  ${name}${ok ? '' : '  — ' + detail}`;
+      out.append(div);
+    }
+    const failed = results.filter((r) => !r.ok).length;
+    const summary = document.createElement('pre');
+    summary.textContent = `${results.length - failed}/${results.length} assertions passed (${scenario}${scenario === 'restart-reconcile' ? ', doc=' + (docLive ? 1 : 0) : ''})`;
+    out.prepend(summary);
+    document.title = failed
+      ? `FAILED (${failed}) — background restart harness`
+      : `PASS (${results.length}) — background restart harness`;
+  </script>
+</body>
+</html>

@@ -341,6 +341,11 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
       // session and local behave identically; onChanged carries the area name
       const makeArea = (name, map) => ({
         async get(keys) {
+          // test hook: a held gate keeps reads pending so a scenario can fire
+          // a message INSIDE the worker's cold-start window, before its
+          // startup state load completes (test/background-restart.html's
+          // cold-race scenario). Never set outside that page.
+          if (chrome._mock?.storageGetGate) await chrome._mock.storageGetGate;
           if (typeof keys === 'string') return { [keys]: map.get(keys) };
           if (Array.isArray(keys)) {
             return Object.fromEntries(keys.map((k) => [k, map.get(k)]));

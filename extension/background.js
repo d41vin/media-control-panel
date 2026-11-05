@@ -453,6 +453,23 @@ const pendingDesiredGain = new Map(); // tabId -> gain requested mid-start
 let boostReqSeq = 0;
 const boostReqs = new Map(); // tabId -> request id of the current request
 
+// Boost handlers must never act on the module default (empty) map: the
+// offscreen document outlives worker sleeps, so boost messages wake a COLD
+// worker whose persisted state has not loaded yet (refreshBoosts runs late
+// in the startup IIFE). Every boost decision awaits this gate, exactly like
+// the speed policy's ensureSpeedState — a cold mcp-boost-ended/stop/gain
+// would otherwise persist the empty map over other tabs' entries and close
+// the shared offscreen document out from under a live pipeline.
+let boostStateReady = null;
+function ensureBoostState() {
+  if (!boostStateReady) {
+    boostStateReady = refreshBoosts().catch(() => {
+      boostStateReady = null; // retry on the next event
+    });
+  }
+  return boostStateReady;
+}
+
 async function refreshBoosts() {
   try {
     const { boosts: b } = await chrome.storage.session.get('boosts');
@@ -631,6 +648,7 @@ async function stopBoostForTab(tabId) {
   // start (stream-id fetch, offscreen forward, in-flight getUserMedia); the
   // id travels with the stop so a DELAYED stop from an older request can
   // never tear down a newer, restarted pipeline
+  await ensureBoostState(); // a cold worker must load persisted state first
   clearBoostTimer(tabId);
   const reqId = boostReqs.get(tabId);
   boostReqs.delete(tabId);
@@ -668,6 +686,7 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
 async function routeMessage(msg, sender) {
   // policy commands and reports never race the startup state load
   if (msg.type.startsWith('mcp-speed-')) await ensureSpeedState();
+  if (msg.type.startsWith('mcp-boost-')) await ensureBoostState();
   switch (msg.type) {
     // --- from page managers --------------------------------------------------
     case 'mcp-speed-report': {
@@ -999,6 +1018,9 @@ async function onTabGone(tabId) {
     void chrome.storage.session.set({ speedRevs: tabRevs }).catch(() => {});
   }
   noteUnmanaged(tabId);
+  // a cold worker must load persisted boost state before deciding whether
+  // this tab's boost needs the stop path
+  await ensureBoostState();
   if (boosts[tabId] || boostStartsInFlight.has(tabId)) {
     await stopBoostForTab(tabId);
   }
@@ -1044,7 +1066,7 @@ chrome.runtime.onInstalled.addListener(() => {
 void (async () => {
   await refreshSettings();
   await ensureSpeedState();
-  await refreshBoosts();
+  await ensureBoostState();
   await reconcileBoosts(true); // a fresh worker: no startup can be in flight
   await updateBadge();
   if (enforcementNeeded()) void syncSpeedEverywhere();

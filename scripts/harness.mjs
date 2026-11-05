@@ -90,6 +90,40 @@ async function waitFor(fn, ms = 15000, step = 250) {
   }
 }
 
+/**
+ * Run one background-style harness page (asserts on load, encodes the
+ * outcome in document.title, renders .pass/.fail divs) and print its lines.
+ * Used for background-mock.html and the background-restart.html scenarios.
+ */
+async function runHarnessPage(cdp, url, label) {
+  const target = await cdp.send('Target.createTarget', { url });
+  const session = (await cdp.send('Target.attachToTarget', { targetId: target.targetId, flatten: true })).sessionId;
+  await cdp.send('Runtime.enable', {}, session);
+  let lastProgress = '';
+  const title = await waitFor(
+    () =>
+      evalIn(cdp, session, `document.title`).then((t) => {
+        if (t !== lastProgress) {
+          lastProgress = t;
+          console.log('  ..', String(t).slice(0, 110));
+        }
+        return /^(PASS|FAILED) \(/.test(t) ? t : null;
+      }),
+    120000,
+  ).catch((e) => {
+    // surface what the page reported instead of failing blind
+    const errs = cdp.pageErrors.join('\n  ');
+    throw new Error(`${label} never finished: ${e.message}\n  page errors:\n  ${errs}`);
+  });
+  const lines = await evalIn(
+    cdp,
+    session,
+    `[...document.querySelectorAll('.pass, .fail')].map(d => d.className + ' ' + d.textContent.trim())`,
+  );
+  for (const line of lines) console.log(`  ${line}`);
+  return { title, lines };
+}
+
 async function main() {
   const server = spawn(process.execPath, [join(ROOT, 'serve.mjs')], { stdio: 'ignore' });
   const profile = mkdtempSync(join(tmpdir(), 'mcp-harness-'));
@@ -185,6 +219,24 @@ async function main() {
       console.error(`FAIL  background-mock: ${bgTitle}`);
     } else {
       console.log(`  ok  background-mock: ${bgTitle}`);
+    }
+
+    // --- background cold-start / restart scenarios ----------------------------
+    // Each page loads a FRESH module instance against a pre-seeded session —
+    // the deterministic stand-in for a worker restart (a page cannot re-import
+    // a module with fresh state).
+    for (const [url, label] of [
+      [`http://127.0.0.1:${SERVE_PORT}/test/background-restart.html?scenario=cold-race`, 'background-restart cold-race'],
+      [`http://127.0.0.1:${SERVE_PORT}/test/background-restart.html?scenario=restart-reconcile&doc=1`, 'background-restart reconcile (doc live)'],
+      [`http://127.0.0.1:${SERVE_PORT}/test/background-restart.html?scenario=restart-reconcile&doc=0`, 'background-restart reconcile (doc gone)'],
+    ]) {
+      const { title } = await runHarnessPage(cdp, url, label);
+      if (!title.startsWith('PASS')) {
+        failed = true;
+        console.error(`FAIL  ${label}: ${title}`);
+      } else {
+        console.log(`  ok  ${label}: ${title}`);
+      }
     }
 
     // --- popup mock harness (smoke: real popup.js against the mock) ----------
