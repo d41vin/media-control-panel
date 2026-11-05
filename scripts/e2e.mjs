@@ -328,7 +328,11 @@ async function main() {
       `(async () => {
          const a = document.querySelectorAll('audio')[0];
          a.loop = true; // a 10 s tone must not end between the section's clicks
-         a.currentTime = 0;
+         // start at a non-zero position: pageToggle's resume tiers prefer an
+         // element that "actually started" (currentTime > 0) — a fast run can
+         // pause before currentTime advances from 0, and the resume would
+         // then land on whichever remote video reached readyState ≥ 2 first
+         a.currentTime = 0.5;
          // the canvas live video never ends; if it is playing, pageToggle
          // would pause-all on the "resume" click instead of resuming the
          // tone — pause it so the tone is the only playing element
@@ -2265,6 +2269,23 @@ async function main() {
       await evalIn(cdp, fix.A.session, `mcpFix.reattach(${detIdx})`);
       await waitSync(() => evalIn(cdp, fix.A.session, `Math.abs(mcpFix.rates()[${detIdx}] - 2.75) < 0.01`), 10000);
       ok('speed-matrix 17c: reattached media is governed again (2.75×)');
+
+      // 18. media in NESTED open shadow roots is detected, governed, and
+      //     probed — the collection walk must descend component-in-component
+      //     players (matrix #18)
+      {
+        const nestedIdx = await evalIn(
+          cdp, fix.A.session,
+          `(async () => { const i = mcpFix.addNested(); await mcpFix.play(i); return i; })()`,
+          true,
+        );
+        await waitSync(() => evalIn(cdp, fix.A.session, `Math.abs(mcpFix.rates()[${nestedIdx}] - 2.75) < 0.01`));
+        ok('speed-matrix 18a: media in nested open shadow roots receives the page policy (2.75×)');
+        const siteLine = await evalIn(cdp, pmS, rowExpr('A', `r.querySelector('.t-site').textContent`));
+        siteLine.includes('×')
+          ? ok('speed-matrix 18b: the popup probe sees the nested media (multi-element count)')
+          : bad('speed-matrix 18b: the popup probe sees the nested media (multi-element count)', `site=${siteLine}`);
+      }
     }
 
     await cdp.send('Target.closeTarget', { targetId: fix.A.targetId });

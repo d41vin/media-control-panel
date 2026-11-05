@@ -98,6 +98,21 @@
         reattach(i) {
           document.body.append(els[i]);
         },
+        // a web-component-style player: host → shadow root → nested host →
+        // its shadow root → the actual media (the walk must descend)
+        addNested() {
+          const outer = document.createElement('div');
+          const outerRoot = outer.attachShadow({ mode: 'open' });
+          const inner = document.createElement('div');
+          const innerRoot = inner.attachShadow({ mode: 'open' });
+          const a = document.createElement('audio');
+          a.src = SRC;
+          innerRoot.append(a);
+          outerRoot.append(inner);
+          document.body.append(outer);
+          els.push(a);
+          return els.length - 1;
+        },
         pushState(u) {
           history.pushState({}, '', u);
         },

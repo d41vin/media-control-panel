@@ -47,11 +47,27 @@ export function pageProbe(site) {
     };
   };
   const els = (() => {
-    const found = [...document.querySelectorAll('video, audio')];
-    for (const el of document.querySelectorAll('*')) {
-      if (el.shadowRoot) found.push(...el.shadowRoot.querySelectorAll('video, audio'));
+    // root worklist: every open shadow root is another root to search, so
+    // media nested inside component-in-component players is reached too
+    const found = [];
+    const seen = new Set();
+    const roots = [document];
+    while (roots.length) {
+      const root = roots.pop();
+      for (const el of root.querySelectorAll('video, audio')) {
+        if (!seen.has(el)) {
+          seen.add(el);
+          if (el.isConnected) found.push(el);
+        }
+      }
+      for (const el of root.querySelectorAll('*')) {
+        if (el.shadowRoot && !seen.has(el.shadowRoot)) {
+          seen.add(el.shadowRoot);
+          roots.push(el.shadowRoot);
+        }
+      }
     }
-    return found.filter((el) => el.isConnected);
+    return found;
   })();
   const siteButtons = site
     ? {
@@ -126,11 +142,27 @@ export function pagePing(site) {
     };
   };
   const els = (() => {
-    const found = [...document.querySelectorAll('video, audio')];
-    for (const el of document.querySelectorAll('*')) {
-      if (el.shadowRoot) found.push(...el.shadowRoot.querySelectorAll('video, audio'));
+    // root worklist: every open shadow root is another root to search, so
+    // media nested inside component-in-component players is reached too
+    const found = [];
+    const seen = new Set();
+    const roots = [document];
+    while (roots.length) {
+      const root = roots.pop();
+      for (const el of root.querySelectorAll('video, audio')) {
+        if (!seen.has(el)) {
+          seen.add(el);
+          if (el.isConnected) found.push(el);
+        }
+      }
+      for (const el of root.querySelectorAll('*')) {
+        if (el.shadowRoot && !seen.has(el.shadowRoot)) {
+          seen.add(el.shadowRoot);
+          roots.push(el.shadowRoot);
+        }
+      }
     }
-    return found.filter((el) => el.isConnected);
+    return found;
   })();
   const el = els.find((m) => !m.paused && !m.ended) || els[0];
   if (!el) return { present: false };
@@ -152,11 +184,27 @@ export function pagePing(site) {
 /** Toggle: any playing -> pause all in this frame; else resume what played. */
 export function pageToggle() {
   const els = (() => {
-    const found = [...document.querySelectorAll('video, audio')];
-    for (const el of document.querySelectorAll('*')) {
-      if (el.shadowRoot) found.push(...el.shadowRoot.querySelectorAll('video, audio'));
+    // root worklist: every open shadow root is another root to search, so
+    // media nested inside component-in-component players is reached too
+    const found = [];
+    const seen = new Set();
+    const roots = [document];
+    while (roots.length) {
+      const root = roots.pop();
+      for (const el of root.querySelectorAll('video, audio')) {
+        if (!seen.has(el)) {
+          seen.add(el);
+          if (el.isConnected) found.push(el);
+        }
+      }
+      for (const el of root.querySelectorAll('*')) {
+        if (el.shadowRoot && !seen.has(el.shadowRoot)) {
+          seen.add(el.shadowRoot);
+          roots.push(el.shadowRoot);
+        }
+      }
     }
-    return found.filter((el) => el.isConnected);
+    return found;
   })();
   if (!els.length) return { acted: false };
   const playing = els.filter((el) => !el.paused && !el.ended);
@@ -185,11 +233,27 @@ export function pageToggle() {
  */
 export function pagePlay() {
   const els = (() => {
-    const found = [...document.querySelectorAll('video, audio')];
-    for (const el of document.querySelectorAll('*')) {
-      if (el.shadowRoot) found.push(...el.shadowRoot.querySelectorAll('video, audio'));
+    // root worklist: every open shadow root is another root to search, so
+    // media nested inside component-in-component players is reached too
+    const found = [];
+    const seen = new Set();
+    const roots = [document];
+    while (roots.length) {
+      const root = roots.pop();
+      for (const el of root.querySelectorAll('video, audio')) {
+        if (!seen.has(el)) {
+          seen.add(el);
+          if (el.isConnected) found.push(el);
+        }
+      }
+      for (const el of root.querySelectorAll('*')) {
+        if (el.shadowRoot && !seen.has(el.shadowRoot)) {
+          seen.add(el.shadowRoot);
+          roots.push(el.shadowRoot);
+        }
+      }
     }
-    return found.filter((el) => el.isConnected);
+    return found;
   })();
   if (!els.length) return { acted: false };
   if (els.some((el) => !el.paused && !el.ended)) return { acted: true, state: 'playing' };
@@ -209,11 +273,27 @@ export function pagePlay() {
 /** Pause every playing element in this frame. No-op when nothing plays. */
 export function pagePause() {
   const els = (() => {
-    const found = [...document.querySelectorAll('video, audio')];
-    for (const el of document.querySelectorAll('*')) {
-      if (el.shadowRoot) found.push(...el.shadowRoot.querySelectorAll('video, audio'));
+    // root worklist: every open shadow root is another root to search, so
+    // media nested inside component-in-component players is reached too
+    const found = [];
+    const seen = new Set();
+    const roots = [document];
+    while (roots.length) {
+      const root = roots.pop();
+      for (const el of root.querySelectorAll('video, audio')) {
+        if (!seen.has(el)) {
+          seen.add(el);
+          if (el.isConnected) found.push(el);
+        }
+      }
+      for (const el of root.querySelectorAll('*')) {
+        if (el.shadowRoot && !seen.has(el.shadowRoot)) {
+          seen.add(el.shadowRoot);
+          roots.push(el.shadowRoot);
+        }
+      }
     }
-    return found.filter((el) => el.isConnected);
+    return found;
   })();
   const playing = els.filter((el) => !el.paused && !el.ended);
   for (const el of playing) el.pause();
@@ -223,11 +303,27 @@ export function pagePause() {
 /** Seek the primary element. Clamped; refused on live streams. */
 export function pageSeekTo({ time }) {
   const els = (() => {
-    const found = [...document.querySelectorAll('video, audio')];
-    for (const el of document.querySelectorAll('*')) {
-      if (el.shadowRoot) found.push(...el.shadowRoot.querySelectorAll('video, audio'));
+    // root worklist: every open shadow root is another root to search, so
+    // media nested inside component-in-component players is reached too
+    const found = [];
+    const seen = new Set();
+    const roots = [document];
+    while (roots.length) {
+      const root = roots.pop();
+      for (const el of root.querySelectorAll('video, audio')) {
+        if (!seen.has(el)) {
+          seen.add(el);
+          if (el.isConnected) found.push(el);
+        }
+      }
+      for (const el of root.querySelectorAll('*')) {
+        if (el.shadowRoot && !seen.has(el.shadowRoot)) {
+          seen.add(el.shadowRoot);
+          roots.push(el.shadowRoot);
+        }
+      }
     }
-    return found.filter((el) => el.isConnected);
+    return found;
   })();
   const el = els.find((m) => !m.paused && !m.ended) || els[0];
   if (!el || el.duration === Infinity) return { acted: false };
@@ -244,11 +340,27 @@ export function pageSeekTo({ time }) {
 
 export function pageSeekBy({ seconds }) {
   const els = (() => {
-    const found = [...document.querySelectorAll('video, audio')];
-    for (const el of document.querySelectorAll('*')) {
-      if (el.shadowRoot) found.push(...el.shadowRoot.querySelectorAll('video, audio'));
+    // root worklist: every open shadow root is another root to search, so
+    // media nested inside component-in-component players is reached too
+    const found = [];
+    const seen = new Set();
+    const roots = [document];
+    while (roots.length) {
+      const root = roots.pop();
+      for (const el of root.querySelectorAll('video, audio')) {
+        if (!seen.has(el)) {
+          seen.add(el);
+          if (el.isConnected) found.push(el);
+        }
+      }
+      for (const el of root.querySelectorAll('*')) {
+        if (el.shadowRoot && !seen.has(el.shadowRoot)) {
+          seen.add(el.shadowRoot);
+          roots.push(el.shadowRoot);
+        }
+      }
     }
-    return found.filter((el) => el.isConnected);
+    return found;
   })();
   const el = els.find((m) => !m.paused && !m.ended) || els[0];
   if (!el) return { acted: false };
@@ -264,11 +376,27 @@ export function pageSeekBy({ seconds }) {
 /** Volume of the primary element (0..1). */
 export function pageSetVolume({ volume }) {
   const els = (() => {
-    const found = [...document.querySelectorAll('video, audio')];
-    for (const el of document.querySelectorAll('*')) {
-      if (el.shadowRoot) found.push(...el.shadowRoot.querySelectorAll('video, audio'));
+    // root worklist: every open shadow root is another root to search, so
+    // media nested inside component-in-component players is reached too
+    const found = [];
+    const seen = new Set();
+    const roots = [document];
+    while (roots.length) {
+      const root = roots.pop();
+      for (const el of root.querySelectorAll('video, audio')) {
+        if (!seen.has(el)) {
+          seen.add(el);
+          if (el.isConnected) found.push(el);
+        }
+      }
+      for (const el of root.querySelectorAll('*')) {
+        if (el.shadowRoot && !seen.has(el.shadowRoot)) {
+          seen.add(el.shadowRoot);
+          roots.push(el.shadowRoot);
+        }
+      }
     }
-    return found.filter((el) => el.isConnected);
+    return found;
   })();
   const el = els.find((m) => !m.paused && !m.ended) || els[0];
   if (!el) return { acted: false };
@@ -284,11 +412,27 @@ export function pageSetVolume({ volume }) {
  */
 export function pageSetMuted({ muted }) {
   const els = (() => {
-    const found = [...document.querySelectorAll('video, audio')];
-    for (const el of document.querySelectorAll('*')) {
-      if (el.shadowRoot) found.push(...el.shadowRoot.querySelectorAll('video, audio'));
+    // root worklist: every open shadow root is another root to search, so
+    // media nested inside component-in-component players is reached too
+    const found = [];
+    const seen = new Set();
+    const roots = [document];
+    while (roots.length) {
+      const root = roots.pop();
+      for (const el of root.querySelectorAll('video, audio')) {
+        if (!seen.has(el)) {
+          seen.add(el);
+          if (el.isConnected) found.push(el);
+        }
+      }
+      for (const el of root.querySelectorAll('*')) {
+        if (el.shadowRoot && !seen.has(el.shadowRoot)) {
+          seen.add(el.shadowRoot);
+          roots.push(el.shadowRoot);
+        }
+      }
     }
-    return found.filter((el) => el.isConnected);
+    return found;
   })();
   const el = els.find((m) => !m.paused && !m.ended) || els[0];
   if (!el) return { acted: false };
@@ -303,11 +447,27 @@ export function pagePiP() {
     return { acted: true, pip: false };
   }
   const els = (() => {
-    const found = [...document.querySelectorAll('video')];
-    for (const el of document.querySelectorAll('*')) {
-      if (el.shadowRoot) found.push(...el.shadowRoot.querySelectorAll('video'));
+    // root worklist (video-only variant): every open shadow root is another
+    // root to search, so nested component-in-component players are reached
+    const found = [];
+    const seen = new Set();
+    const roots = [document];
+    while (roots.length) {
+      const root = roots.pop();
+      for (const el of root.querySelectorAll('video')) {
+        if (!seen.has(el)) {
+          seen.add(el);
+          if (el.isConnected) found.push(el);
+        }
+      }
+      for (const el of root.querySelectorAll('*')) {
+        if (el.shadowRoot && !seen.has(el.shadowRoot)) {
+          seen.add(el.shadowRoot);
+          roots.push(el.shadowRoot);
+        }
+      }
     }
-    return found.filter((el) => el.isConnected);
+    return found;
   })();
   const el = els.find((m) => !m.paused && !m.ended) || els[0];
   if (!el || !el.requestPictureInPicture) return { acted: false };

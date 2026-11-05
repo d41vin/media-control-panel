@@ -108,11 +108,27 @@ export function installSpeedManager(init) {
   };
 
   const collect = () => {
-    const found = [...document.querySelectorAll('video, audio')];
-    for (const el of document.querySelectorAll('*')) {
-      if (el.shadowRoot) found.push(...el.shadowRoot.querySelectorAll('video, audio'));
+    // root worklist: every open shadow root is another root to search, so
+    // media nested inside component-in-component players is reached too
+    const found = [];
+    const seen = new Set();
+    const roots = [document];
+    while (roots.length) {
+      const root = roots.pop();
+      for (const el of root.querySelectorAll('video, audio')) {
+        if (!seen.has(el)) {
+          seen.add(el);
+          if (el.isConnected) found.push(el);
+        }
+      }
+      for (const el of root.querySelectorAll('*')) {
+        if (el.shadowRoot && !seen.has(el.shadowRoot)) {
+          seen.add(el.shadowRoot);
+          roots.push(el.shadowRoot);
+        }
+      }
     }
-    return found.filter((el) => el.isConnected);
+    return found;
   };
 
   const near = (a, b) => Math.abs(a - b) < 1e-6;
