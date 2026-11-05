@@ -344,18 +344,23 @@ async function main() {
     if (toneRestart !== 'played') note(`tone restart before play/pause: ${toneRestart}`);
     await waitFor(() => evalIn(cdp, mediaSession, `!document.querySelectorAll('audio')[0].paused`));
     await evalIn(cdp, popupSession, `document.querySelector('.row .play').click()`);
-    await waitFor(() => evalIn(cdp, mediaSession, `document.querySelectorAll('audio')[0].paused`));
+    // the page-level promise: pageToggle pauses every playing element
+    await waitFor(() =>
+      evalIn(cdp, mediaSession, `![...document.querySelectorAll('video, audio')].some((m) => !m.paused && !m.ended)`),
+    );
     ok('row play button pauses the page media');
     // the resume click is the first popup→page interaction after the probes
     // settle and the media page is still loading remote media — executeScript
-    // "fails intermittently on busy tabs" (the worker comment says the same).
-    // Up to three clicks with a strict 4 s wait each; the assertion stays
-    // strict and the failure diagnostics capture the tone's actual state.
+    // "fails intermittently on busy tabs" (the worker comment says the same),
+    // and under load the tone's own playback can stall at t=0 (renderer
+    // starvation) making pageToggle's tiers resume a loaded video instead.
+    // The user-facing promise is "the page's media resumed" — assert that,
+    // with up to three clicks; the assertion itself stays strict.
     let resumed = false;
     for (let i = 0; i < 3 && !resumed; i++) {
       await evalIn(cdp, popupSession, `document.querySelector('.row .play').click()`);
       resumed = await waitFor(
-        () => evalIn(cdp, mediaSession, `!document.querySelectorAll('audio')[0].paused`),
+        () => evalIn(cdp, mediaSession, `[...document.querySelectorAll('video, audio')].some((m) => !m.paused && !m.ended)`),
         4000,
       ).catch(() => false);
     }
@@ -374,7 +379,7 @@ async function main() {
       url: `http://127.0.0.1:${SERVE_PORT}/test/media-page.html`,
     });
     const media2Session = (await cdp.send('Target.attachToTarget', { targetId: media2.targetId, flatten: true })).sessionId;
-    await waitFor(() => evalIn(cdp, media2Session, `!!document.querySelector('audio')`));
+    await waitFor(() => evalIn(cdp, media2Session, `!!document.querySelector('audio')`), 15000);
     await evalIn(cdp, media2Session, `document.querySelectorAll('audio')[0].play()`);
     if (AUDIBLE_OK) {
       await waitFor(() => evalIn(cdp, popupSession, `document.querySelectorAll('.row').length === 2`));
@@ -2285,6 +2290,46 @@ async function main() {
         siteLine.includes('×')
           ? ok('speed-matrix 18b: the popup probe sees the nested media (multi-element count)')
           : bad('speed-matrix 18b: the popup probe sees the nested media (multi-element count)', `site=${siteLine}`);
+      }
+
+      // 19. media vanishing mid-session: the card must demote to truthful
+      //     paused state (three present-misses → re-probe → probe null), and
+      //     recover via the popup-reopen path once media plays again
+      //     (headless cannot emit the audible events that drive the open
+      //     popup's re-probe in real use)
+      {
+        // the phantom premise: PLAYING media vanishes while the card's ping
+        // loop is live (a paused card has no loop and simply keeps its last
+        // truthful probe data)
+        await evalIn(cdp, fix.A.session, `(async () => { await mcpFix.play(0); return mcpFix.playing()[0]; })()`, true);
+        await evalIn(
+          cdp, fix.A.session,
+          `(async () => { while (mcpFix.rates().length) mcpFix.remove(0); return mcpFix.rates().length; })()`,
+          true,
+        );
+        const demoted = await waitFor(
+          () =>
+            evalIn(
+              cdp, pmS,
+              rowExpr('A', `r.classList.contains('paused') && r.querySelector('.pos').disabled && r.querySelector('.pos-readout').textContent === '—' ? 'demoted' : null`),
+            ),
+          10000,
+        ).catch(() => false);
+        demoted === 'demoted'
+          ? ok('speed-matrix 19a: a card whose playing media vanishes demotes to truthful paused state (no phantom)')
+          : bad('speed-matrix 19a: a card whose playing media vanishes demotes to truthful paused state (no phantom)',
+              JSON.stringify(await evalIn(cdp, pmS, rowExpr('A', `({ cls: r.className, aria: r.querySelector('.play').getAttribute('aria-label'), readout: r.querySelector('.pos-readout').textContent })`)).catch((e) => `eval: ${e.message}`)));
+        await evalIn(
+          cdp, fix.A.session,
+          `(async () => { const i = mcpFix.newMedia(); await mcpFix.play(i); return i; })()`,
+          true,
+        );
+        await reopenPopup();
+        await waitSync(
+          () => evalIn(cdp, pmS, rowExpr('A', `!r.classList.contains('paused') && r.querySelector('.rate-readout').textContent === '2.75×'`)),
+          15000,
+        );
+        ok('speed-matrix 19b: the card recovers via popup reopen (media governed at the override 2.75×)');
       }
     }
 

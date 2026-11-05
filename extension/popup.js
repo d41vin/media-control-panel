@@ -44,6 +44,12 @@ import {
 // the last line of defense, armed 3 s behind it.
 const BOOST_RESULT_BELT_MS = 15000;
 
+// A card's ping reports "no media here" this many consecutive times before
+// the popup re-probes the tab (an SPA detached its video) — applyProbe(null)
+// then demotes the row to truthful paused state instead of a phantom
+// "playing" card with frozen readouts.
+const PRESENT_MISS_REPROBE = 3;
+
 const listEl = document.getElementById('list');
 const emptyEl = document.getElementById('empty');
 const countEl = document.getElementById('count');
@@ -528,6 +534,7 @@ function makeRow(tab) {
       closeBtn,
     },
     ping: null,
+    presentMisses: 0,
     // play-state ordering: when a command (play/pause) last landed on this
     // tab. Probe and ping results captured before that instant are stale and
     // must never flip self.mediaPlaying back — the phantom-playback guard.
@@ -1232,7 +1239,25 @@ async function pingNow(rec) {
     // result must never resurrect its card into the DOM
     if (rows.get(rec.tab.id) !== rec) return null;
     const state = results[0]?.result;
-    if (!state?.present) return null;
+    if (!state?.present) {
+      // the primary frame reports no media: a transient probe miss or the
+      // media vanished (an SPA replaced it). Count and re-probe once the
+      // misses look real — applyProbe(null) demotes the row to truthful
+      // paused state. Command-staleness rules apply as everywhere else.
+      if (startedAt >= rec.commandAt && !rec.commandPending) {
+        rec.presentMisses = (rec.presentMisses ?? 0) + 1;
+        if (rec.presentMisses >= PRESENT_MISS_REPROBE) {
+          rec.presentMisses = 0;
+          void probeTab(rec).then((probe) => {
+            if (rows.get(rec.tab.id) !== rec) return; // closed meanwhile
+            applyProbe(rec, probe);
+            refreshChrome();
+          });
+        }
+      }
+      return null;
+    }
+    rec.presentMisses = 0;
     // fold fresh state into the probe record so updateRow() — the single
     // render path — always writes the newest known values
     const p = primaryOfProbe(rec.probe);
@@ -1428,7 +1453,14 @@ async function togglePlay(rec, { exclusive } = {}) {
   updateRow(rec);
   reorder();
   try {
-    await chrome.scripting.executeScript({ target: targetFor(rec), func: pageToggle });
+    const results = await chrome.scripting.executeScript({ target: targetFor(rec), func: pageToggle });
+    const acted = results[0]?.result?.acted === true;
+    if (!acted && rows.get(rec.tab.id) === rec) {
+      // nothing toggled: the optimistic flip was wrong (the media vanished
+      // or the tab turned uninjectable) — fall back to the known truth
+      rec.mediaPlaying = null;
+      updateRow(rec);
+    }
   } catch {
     // uninjectable tab (chrome://, sandboxed frame): the command never landed,
     // so fall back to the truth we know instead of the optimistic guess
@@ -1659,6 +1691,7 @@ function applyProbe(rec, probe) {
   // a new probe means a new document/media view: the previous player-state
   // read must not leak into this one
   rec.playerMuted = null;
+  rec.presentMisses = 0;
   if (probe?.siteButtons) rec.adapterState = probe.siteButtons;
   const primary = probe ? primaryOfProbe(probe) : null;
   // A probe captured before the newest command landed is stale: the command's
