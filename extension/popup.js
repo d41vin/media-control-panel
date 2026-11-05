@@ -1165,11 +1165,21 @@ function syncCard(rec) {
 
   if (element) {
     const live = element.duration === -1;
+    // duration null = metadata not loaded yet (NOT a live stream): the seek
+    // bar stays visible but truthfully disabled until metadata arrives —
+    // a loading video must not display the red LIVE tag
+    const unknown = element.duration === null;
     n.pos.closest('.card-timeline').classList.toggle('live', live);
-    // seeking is meaningless on live streams: the ±10 s buttons stay in
-    // place and truthfully disabled rather than no-op
-    n.back10.disabled = n.fwd10.disabled = disabled || live;
-    if (!live) {
+    // seeking is meaningless on live streams and impossible without a
+    // duration: the ±10 s buttons stay in place and truthfully disabled
+    n.back10.disabled = n.fwd10.disabled = disabled || live || unknown;
+    n.pos.disabled = disabled || unknown;
+    if (unknown) {
+      // metadata not loaded: no duration to show — '—' until the ping lands
+      // the real times, at which point unknown flips to a normal timeline
+      n.posReadout.textContent = '—';
+    }
+    if (!live && !unknown) {
       n.pos.max = String(Math.floor(element.duration));
       n.pos.value = String(Math.floor(element.currentTime));
       setFill(n.pos);

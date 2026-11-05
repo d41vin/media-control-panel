@@ -260,7 +260,12 @@ them. The volume popover names both, side by side, each row its own toggle:
   - `readState` — the popup's ping reads the player's own `isMuted()` so the
     "Player audio" row follows native site mute even on builds whose UI
     updates the element lazily; `null` (no player surface) falls back to the
-    element.
+    element. The syncPlayer mute branch re-asserts the player's model
+    through its own API (`p.mute()/p.unMute()`); on builds that re-push
+    their model onto the element this aligns it (the verified behavior —
+    the real-site mute matrix passes through this path); on builds that
+    ignore the call the alignment is best-effort and the documented Y1
+    element fallback applies.
 - **Y2 (when syncs fire).** After every speed apply on an adapter-host tab
   (background), and after every popup-initiated volume/player-mute command
   there, exactly one `syncPlayer` runs. A settled player sees zero writes —
@@ -443,6 +448,11 @@ colour edge to edge; the rounded surfaces are the cards and popovers inside.
 - **Website-set rate** (no policy in force): the card shows the element's
   observed rate, tooltip `Website-set rate 1.50× — global is 1.00×`; stepping
   builds from the observed value.
+- **Unknown duration** (metadata not loaded): the seek bar stays visible but
+  truthfully disabled with a `—` readout — the red LIVE tag is reserved for
+  live streams (`duration === Infinity`), never for media whose metadata has
+  not arrived; the timeline flips to normal the moment a probe carries a
+  finite duration.
 - **Boost**: chip quiet at 100 %, accent + percentage while active, `…`
   while starting, honest error text in the popover if capture failed (and a
   timestamped auto-clear so a failure never sticks).
