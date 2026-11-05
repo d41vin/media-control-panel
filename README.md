@@ -245,7 +245,8 @@ browser profile. The test rigs default to Google Chrome (Edge via `MCP_BROWSER=e
 |---|---|---|
 | `npm test` | static checks, no browser | passed |
 | `npm run harness` | headless mock pages (background logic + popup smoke) | passed — 79 background assertions + popup mock |
-| `npm run e2e` | full end-to-end suite in real Chrome | 122/122 |
+| `npm run e2e` | full end-to-end suite in real Chrome | 129/129 |
+| `npm run e2e:headed` | the same suite in a headed Chrome window (audio live) — the capture-adjacent active-boost assertions run only if this build grants capture to the CDP-opened popup; otherwise it records the refusal and continues | runs; capture grant is a manual check (CHECKLIST #59d) |
 | `npm run youtube-check` | real youtube.com in a headed Chrome window | 13/13 |
 | `npm run verify-capture` | headed probe of the capture API's activeTab behavior | records the browser's refusal (toolbar-click check remains manual) |
 

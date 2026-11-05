@@ -140,13 +140,18 @@ async function main() {
     // Chrome is the primary target; Edge stays selectable via MCP_BROWSER.
     // Branded Chrome 137+ ignores --load-extension, so Chrome loads the
     // unpacked extension through the CDP Extensions domain after connect.
+    // `--headed` runs a REAL window instead of headless: capture-adjacent
+    // behavior (the active-boost branch) is only grantable outside headless
+    // — see the boost section. Audio is NOT muted in headed mode (brief tone
+    // audio on the speakers is the price of a real capture pipeline).
+    const HEADED = process.argv.includes('--headed');
     const browserPath = browserPathOf();
-    const browserInfo = `${browserName()} ${browserVersion(browserPath) ?? '(version unknown)'}`;
+    const browserInfo = `${browserName()} ${browserVersion(browserPath) ?? '(version unknown)'}${HEADED ? ' (headed)' : ''}`;
     console.log(`browser: ${browserInfo} — ${browserPath}`);
     browserProcess = spawn(
       browserPath,
       [
-        '--headless=new',
+        ...(HEADED ? [] : ['--headless=new']),
         `--remote-debugging-port=${PORT}`,
         `--user-data-dir=${profile}`,
         '--no-first-run',
@@ -154,9 +159,11 @@ async function main() {
         ...extensionArgs(EXT),
         '--autoplay-policy=no-user-gesture-required',
         // new headless renders audio to real speakers — mute the browser,
-        // not the elements/tabs (assertions read those states)
-        '--mute-audio',
+        // not the elements/tabs (assertions read those states). Headed mode
+        // keeps audio live so the capture pipeline is real.
+        ...(HEADED ? [] : ['--mute-audio']),
         '--window-size=1000,900',
+        '--window-position=40,40',
         'about:blank',
       ],
       { stdio: 'ignore' },
@@ -1753,7 +1760,11 @@ async function main() {
         errDocClosed
           ? ok('failed capture releases the offscreen document (no lingering pipeline doc)')
           : bad('failed capture releases the offscreen document (no lingering pipeline doc)', 'offscreen document survived a failed startup');
-        note('real capture/audibility could not be exercised here — manual checklist item');
+        note(
+          HEADED
+            ? 'real capture was refused even headed on this build — manual checklist item (CHECKLIST #59d)'
+            : 'real capture/audibility could not be exercised in headless — run `npm run e2e:headed` for the active-boost assertions, or the manual checklist',
+        );
       } else {
         bad('boost reaches a truthful terminal state (active or error)', `outcome=${boostOutcome}`);
       }
