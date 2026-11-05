@@ -342,9 +342,28 @@ async function main() {
     await evalIn(cdp, popupSession, `document.querySelector('.row .play').click()`);
     await waitFor(() => evalIn(cdp, mediaSession, `document.querySelectorAll('audio')[0].paused`));
     ok('row play button pauses the page media');
-    await evalIn(cdp, popupSession, `document.querySelector('.row .play').click()`);
-    await waitFor(() => evalIn(cdp, mediaSession, `!document.querySelectorAll('audio')[0].paused`));
-    ok('row play button resumes the page media');
+    // the resume click is the first popup→page interaction after the probes
+    // settle and the media page is still loading remote media — executeScript
+    // "fails intermittently on busy tabs" (the worker comment says the same).
+    // Up to three clicks with a strict 4 s wait each; the assertion stays
+    // strict and the failure diagnostics capture the tone's actual state.
+    let resumed = false;
+    for (let i = 0; i < 3 && !resumed; i++) {
+      await evalIn(cdp, popupSession, `document.querySelector('.row .play').click()`);
+      resumed = await waitFor(
+        () => evalIn(cdp, mediaSession, `!document.querySelectorAll('audio')[0].paused`),
+        4000,
+      ).catch(() => false);
+    }
+    resumed
+      ? ok('row play button resumes the page media')
+      : bad(
+          'row play button resumes the page media',
+          JSON.stringify({
+            tone: await evalIn(cdp, mediaSession, `(() => { const a = document.querySelectorAll('audio')[0]; return { paused: a.paused, ended: a.ended, t: a.currentTime, rs: a.readyState, err: a.error?.code ?? null, loop: a.loop }; })()`, true).catch((e) => `eval: ${e.message}`),
+            row: await evalIn(cdp, popupSession, `(() => { const b = document.querySelector('.row .play'); return b ? { aria: b.getAttribute('aria-label'), rows: document.querySelectorAll('.row').length } : 'no row'; })()`, true).catch((e) => `eval: ${e.message}`),
+          }),
+        );
 
     // --- exclusive playback (Alt+click play) ---------------------------------
     const media2 = await cdp.send('Target.createTarget', {
@@ -1335,6 +1354,60 @@ async function main() {
     evA?.volumechange === evB?.volumechange && evA?.ratechange === evB?.ratechange
       ? ok('adapter sync is idempotent — a settled player sees zero duplicate writes')
       : bad('adapter sync is idempotent — a settled player sees zero duplicate writes', JSON.stringify({ evA, evB }));
+
+    // 3b) the clamp→report→adopt loop WITH a policy enforced. A dragging
+    //     build re-asserts its clamp on a later task (the fixture's opt-in
+    //     async drag): the resulting ratechange at the clamped value must be
+    //     recognized as the MAIN-world sync's own echo (data-mcp-player-sync
+    //     stamp) and re-stamped WITHOUT being adopted — otherwise the media
+    //     collapses to the clamp value via a bogus override.
+    {
+      await evalIn(cdp, psSession, `window.mcpSetDragAsync(true)`);
+      // clear the sync marker so the next sync actually pushes the rate
+      await evalIn(cdp, psSession, `delete mcpPS.el.__mcpPlayerRate`);
+      for (let i = 0; i < 6; i++) {
+        await evalIn(cdp, popupSession2, `document.getElementById('gspeed-inc').click()`);
+        await sleep(40);
+      }
+      await waitFor(() => evalIn(cdp, popupSession2, `document.getElementById('gspeed-value').textContent === '2.50×'`));
+      await waitFor(() => evalIn(cdp, psSession, `Math.abs(mcpPS.state().rate - 2.5) < 0.01`));
+      // the manager's attach opened the 2 s settle window (R4b) — it would
+      // swallow the drag transient and make this step vacuous. Wait it out.
+      await sleep(2200);
+      const evsBefore = await evalIn(cdp, psSession, `mcpPS.events()`, true);
+      await evalIn(
+        cdp,
+        psSession,
+        `(async () => { const { ADAPTERS } = await import('${EXT_URL}/lib/adapters.js'); ADAPTERS.youtube.syncPlayer(); })()`,
+        true,
+      );
+      await sleep(700); // the queued clamp transient + restore + re-stamp echoes
+      const clampState = await evalIn(cdp, psSession, `mcpPS.state()`, true);
+      const ovAfterClamp = await evalIn(
+        cdp,
+        swSession,
+        `chrome.storage.session.get('speedOverrides').then((x) => x.speedOverrides ?? {})`,
+        true,
+      );
+      Math.abs(clampState?.rate - 2.5) < 0.01 &&
+      !Object.values(ovAfterClamp).some((o) => Math.abs(o.rate - 2) < 1e-9)
+        ? ok('clamp loop with enforcement active: the drag transient is not adopted (media holds 2.50×)')
+        : bad('clamp loop with enforcement active: the drag transient is not adopted (media holds 2.50×)',
+            `state=${JSON.stringify(clampState)} ov=${JSON.stringify(ovAfterClamp)}`);
+      // no oscillation: once converged, the element is quiet
+      const evsSettled = await evalIn(cdp, psSession, `mcpPS.events()`, true);
+      await sleep(1500);
+      const evsQuiet = await evalIn(cdp, psSession, `mcpPS.events()`, true);
+      evsSettled.ratechange === evsQuiet.ratechange && evsSettled.volumechange === evsQuiet.volumechange
+        ? ok('clamp loop converges: no report/apply oscillation after the sync')
+        : bad('clamp loop converges: no report/apply oscillation after the sync',
+            `settled=${JSON.stringify(evsSettled)} quiet=${JSON.stringify(evsQuiet)}`);
+      await evalIn(cdp, psSession, `window.mcpSetDragAsync(false)`);
+      // clean slate for the keyboard/boost sections
+      await evalIn(cdp, popupSession2, `document.getElementById('gspeed-reset').click()`);
+      await waitFor(() => evalIn(cdp, popupSession2, `document.getElementById('gspeed-value').textContent === '1.00×'`));
+      await waitFor(() => evalIn(cdp, psSession, `Math.abs(mcpPS.state().rate - 1) < 0.01`));
+    }
 
     // 4) graceful no-op on pages without the private player
     const noPlayerTarget = await cdp.send('Target.createTarget', {

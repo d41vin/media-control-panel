@@ -247,7 +247,12 @@ them. The volume popover names both, side by side, each row its own toggle:
     it, never the other way — element-first mute writes lose on reasserting
     builds, the reported failure). A clamping rate menu may not drag the
     media down: the element's actual rate is restored, and a per-element
-    marker prevents re-fighting the same reconciliation.
+    marker prevents re-fighting the same reconciliation. The sync stamps the
+    element (`data-mcp-player-sync`, a content attribute visible from both
+    worlds) before pushing the rate: ratechanges arriving within a short
+    window of that stamp are the sync's own clamp/restore echoes across
+    worlds and are re-stamped without reporting (verified against a
+    dragging-build fixture in the e2e clamp-loop step).
   - `setMuted` — the player API is the only mute channel that sticks on a
     reasserting player: `p.mute()/p.unMute()`, then the ACTUAL `isMuted()`
     is read back and adopted by the popup (commands are idempotent and

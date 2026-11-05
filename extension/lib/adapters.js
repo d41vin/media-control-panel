@@ -127,6 +127,12 @@ function ytSyncPlayer() {
       // __mcpPlayerRate: the last rate this sync reconciled. Without it a
       // player that clamps its element would be re-fought on every call.
       if (Number.isFinite(want) && !near(want, p.getPlaybackRate()) && el.__mcpPlayerRate !== want) {
+        // content attributes are shared across worlds: the ISOLATED-world
+        // manager reads this stamp and treats the clamp transient + restore
+        // arriving within its window as THIS sync's own echoes, not page
+        // choices (a dragging build would otherwise collapse the request to
+        // the clamp value via an adopted override)
+        el.setAttribute('data-mcp-player-sync', String(Date.now()));
         p.setPlaybackRate(want);
         // the player's menu may refuse the value; the media element's actual
         // playback is what matters, so put it back if the call dragged it

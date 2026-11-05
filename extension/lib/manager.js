@@ -95,6 +95,18 @@ export function installSpeedManager(init) {
   };
   const settling = (el) => performance.now() < (settleUntil.get(el) ?? 0);
 
+  // A MAIN-world player-API sync (ytSyncPlayer) stamps the element with
+  // data-mcp-player-sync before pushing the rate through the player's API.
+  // On builds whose menu clamps, the clamp transient and the restore arrive
+  // as ratechanges within this window of the stamp — they are the
+  // extension's own echoes across worlds (content attributes are shared),
+  // so re-stamp without reporting and do not consume an echo credit.
+  const PLAYER_SYNC_WINDOW_MS = 750;
+  const playerSynced = (el) => {
+    const at = Number(el.getAttribute?.('data-mcp-player-sync'));
+    return Number.isFinite(at) && performance.now() - at < PLAYER_SYNC_WINDOW_MS;
+  };
+
   const collect = () => {
     const found = [...document.querySelectorAll('video, audio')];
     for (const el of document.querySelectorAll('*')) {
@@ -215,6 +227,11 @@ export function installSpeedManager(init) {
     // Restore the policy without reporting: it is not a user choice, and
     // adopting it would overwrite the page override / global speed.
     if (settling(el)) {
+      applyTo(el, true);
+      return;
+    }
+    // the player-API sync's own clamp/restore echoes (see playerSynced)
+    if (playerSynced(el)) {
       applyTo(el, true);
       return;
     }

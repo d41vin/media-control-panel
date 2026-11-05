@@ -81,6 +81,14 @@
     let pRate = 1;
     let pVolume = 100;
     let pMuted = false;
+    // A dragging build re-asserts its clamp on a LATER task — after the
+    // sync's restore has run — which is what makes the clamp transient a
+    // real ratechange at the clamped value (a synchronous clamp coalesces
+    // with the restore). Opt-in so the default fixture semantics stay.
+    let dragAsync = false;
+    window.mcpSetDragAsync = (on) => {
+      dragAsync = on;
+    };
     const playerEl = document.getElementById('movie_player');
     Object.assign(playerEl, {
       getPlaybackRate() {
@@ -91,6 +99,11 @@
         const clamped = RATES.reduce((a, b) => (Math.abs(b - r) < Math.abs(a - r) ? b : a));
         pRate = clamped;
         el.playbackRate = clamped; // the API does reach the element
+        if (dragAsync && clamped !== r) {
+          setTimeout(() => {
+            el.playbackRate = clamped; // the build drags the media back down
+          }, 0);
+        }
         render();
         return clamped;
       },
