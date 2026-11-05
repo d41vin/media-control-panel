@@ -283,21 +283,47 @@ export function installSpeedManager(init) {
     adopt(el); // media already playing right now
   };
 
-  const scan = () => {
+  // Subtree scan: walk only the roots the mutations actually touched (the
+  // initial install still walks the whole document). An inserted SUBTREE is
+  // scanned whole (the added node IS a root); media added inside an existing
+  // open shadow root is reached via getRootNode().
+  const scan = (roots) => {
     // replaced SPA elements leave detached nodes behind: prune them so the
     // list cannot grow without bound while a policy stays active
     S.list = S.list.filter((el) => el.isConnected);
-    for (const el of collect()) attach(el);
+    if (!roots) {
+      for (const el of collect()) attach(el);
+      return;
+    }
+    for (const root of roots) {
+      for (const el of root.querySelectorAll('video, audio')) attach(el);
+      for (const el of root.querySelectorAll('*')) {
+        if (el.shadowRoot) {
+          for (const m of el.shadowRoot.querySelectorAll('video, audio')) attach(m);
+        }
+      }
+    }
   };
 
   const scheduleScan = (mutations) => {
     // attribute-only mutations (the most frequent kind on busy pages) never
-    // trigger a DOM walk — only actual element insertions do
-    const added = mutations.some((m) => [...m.addedNodes].some((n) => n.nodeType === 1));
-    if (!added || S.scanTimer) return;
+    // trigger a DOM walk — and neither does a full-document one: only the
+    // inserted subtrees are scanned, so a continuously-churning page cannot
+    // degenerate into periodic full-DOM walks
+    const roots = S.pendingRoots ?? (S.pendingRoots = new Set());
+    for (const m of mutations) {
+      for (const n of m.addedNodes) {
+        if (n.nodeType !== 1) continue;
+        roots.add(n.getRootNode());
+        if (n.shadowRoot) roots.add(n.shadowRoot);
+      }
+    }
+    if (!roots.size || S.scanTimer) return;
     S.scanTimer = setTimeout(() => {
       S.scanTimer = 0;
-      scan();
+      const pending = [...S.pendingRoots];
+      S.pendingRoots = null;
+      scan(pending);
     }, 200);
   };
 

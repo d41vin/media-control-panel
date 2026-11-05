@@ -311,6 +311,33 @@ async function clearOverride(tabId, resync = true) {
 }
 
 /**
+ * Subframe commit: install/update the manager in THAT frame only — the other
+ * frames' managers are current, and a whole-tab sync per subframe commit is
+ * O(frames²) during page load (a watch page with ~15 subframe commits would
+ * issue ~15 all-frames injections that are redundant after the first). A
+ * missed frame self-heals on the next whole-tab sync (top-level commits,
+ * status complete, url changes, global-speed fan-out).
+ */
+async function syncSpeedFrame(tabId, frameId, pageUrl) {
+  await ensureSpeedState();
+  if (!enforcementNeeded()) return;
+  const rate = effectiveRate(tabId);
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      func: installSpeedManager,
+      args: [{ rate, adoptForeign: true, rev: revOf(tabId) }],
+    });
+    noteManaged(tabId);
+  } catch (e) {
+    const msg = String(e?.message ?? e);
+    if (!/Cannot access contents|No tab with id|Frame with ID|cannot be scripted/.test(msg)) {
+      void syncSpeedTab(tabId, pageUrl); // transient: fall back to the whole-tab path
+    }
+  }
+}
+
+/**
  * Make one tab's speed policy real: reconcile a stale-URL override, then
  * inject/update the page manager with the effective rate — or disconnect it
  * when no policy applies. Idempotent; safe to call on every relevant event.
@@ -1006,10 +1033,12 @@ chrome.webNavigation.onCommitted.addListener((details) => {
     void onCommittedNavigation(details.tabId, details.url, details.documentId);
   } else {
     // a frame's document changed: record it so its manager's reports can be
-    // validated against the frame's CURRENT document, and re-sync the tab so
-    // a freshly created frame document gets its own manager (idempotent)
+    // validated against the frame's CURRENT document, and install the
+    // manager into the NEW frame document only (idempotent; the other
+    // frames' managers are current — a whole-tab sync per subframe commit
+    // is O(frames²) during page load)
     noteFrameCommit(details.tabId, details.frameId, details.url, details.documentId);
-    if (enforcementNeeded()) void syncSpeedTab(details.tabId);
+    if (enforcementNeeded()) void syncSpeedFrame(details.tabId, details.frameId, details.url);
   }
 });
 
