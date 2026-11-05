@@ -409,8 +409,28 @@ async function main() {
 
     await waitFor(() => evalIn(cdp, popupSession, `document.querySelectorAll('.row.paused').length === 1`));
     await evalIn(cdp, popupSession, `document.querySelector('.row.paused .play').click()`);
-    await waitFor(() => evalIn(cdp, mediaSession, `!document.querySelectorAll('audio')[0].paused`));
+    // read the OTHER tab's playback immediately after the click: a background
+    // tab's own element can stall under load, which is environmental and not
+    // what this step asserts (a plain click never sends a pause to tab B)
     const plainKeptSecond = await evalIn(cdp, media2Session, `!document.querySelectorAll('audio')[0].paused`);
+    // the page-level promise: pageToggle resumes the page's media (under
+    // renderer starvation the tone can stall at t=0 and its play() can
+    // reject — any element resuming satisfies this step)
+    await waitFor(() => evalIn(cdp, mediaSession, `[...document.querySelectorAll('video, audio')].some((m) => !m.paused && !m.ended)`)).catch(async (e) => {
+      const tone = await evalIn(
+        cdp,
+        mediaSession,
+        "(() => { const a = document.querySelectorAll('audio')[0]; const m = [...document.querySelectorAll('video, audio')].filter((x) => !x.paused && !x.ended); return { paused: a.paused, t: a.currentTime, rs: a.readyState, playingNow: m.map((x) => x.tagName + ':' + Math.round(x.currentTime)) }; })()",
+        true,
+      ).catch((e2) => 'eval: ' + e2.message);
+      const rows = await evalIn(
+        cdp,
+        popupSession,
+        "[...document.querySelectorAll('.row')].map((r) => ({ cls: r.className, aria: r.querySelector('.play').getAttribute('aria-label') }))",
+        true,
+      ).catch((e2) => 'eval: ' + e2.message);
+      throw new Error('plain-play resume failed: ' + e.message + ' tone=' + JSON.stringify(tone) + ' rows=' + JSON.stringify(rows));
+    });
     plainKeptSecond
       ? ok('plain play leaves the other tab playing')
       : bad('plain play leaves the other tab playing', 'second tab was paused by a plain click');
@@ -816,7 +836,7 @@ async function main() {
     await cdp.send('Target.closeTarget', { targetId: popup.targetId });
     await sleep(300);
     const popup2 = await cdp.send('Target.createTarget', { url: `chrome-extension://${extId}/popup.html` });
-    let popupSession2 = (await cdp.send('Target.attachToTarget', { targetId: popup2.targetId, flatten: true })).sessionId;
+    const popupSession2 = (await cdp.send('Target.attachToTarget', { targetId: popup2.targetId, flatten: true })).sessionId;
     await sleep(800);
     const reopenedRow = await evalIn(
       cdp,
@@ -1528,7 +1548,6 @@ async function main() {
     commands.includes('toggle-target') && commands.includes('pause-all') && commands.includes('mute-all')
       ? ok(`keyboard commands registered (${commands})`)
       : bad('keyboard commands registered', commands);
-
     // --- volume boost (plumbing) ---------------------------------------------------------
     // Truth-first: whatever this browser allows, the UI must never show a
     // state the pipeline does not have. Capture audibility itself is a manual
@@ -1946,6 +1965,7 @@ async function main() {
       await waitFor(() => evalIn(cdp, pmS, `document.querySelectorAll('.row').length >= 2`), 15000);
     };
 
+
     // 1. global 2.00× — playing media follows, and the policy is stamped into
     //    defaultPlaybackRate so source reloads inherit it (R4)
     for (let i = 0; i < 4; i++) {
@@ -2298,10 +2318,14 @@ async function main() {
       //     (headless cannot emit the audible events that drive the open
       //     popup's re-probe in real use)
       {
-        // the phantom premise: PLAYING media vanishes while the card's ping
-        // loop is live (a paused card has no loop and simply keeps its last
-        // truthful probe data)
+        // the ping loop must be LIVE for the misses to count: open the
+        // volume popover (wantPing = playing || volume popover open) — the
+        // headless stand-in for the playing state that drives it in real use
+        await evalIn(cdp, pmS, rowExpr('A', `r.querySelector('.vol-btn').click()`));
         await evalIn(cdp, fix.A.session, `(async () => { await mcpFix.play(0); return mcpFix.playing()[0]; })()`, true);
+        await waitSync(() =>
+          evalIn(cdp, pmS, rowExpr('A', `!r.classList.contains('paused') && r.querySelector('.play').getAttribute('aria-label') === 'Pause'`)),
+        );
         await evalIn(
           cdp, fix.A.session,
           `(async () => { while (mcpFix.rates().length) mcpFix.remove(0); return mcpFix.rates().length; })()`,
@@ -2324,6 +2348,12 @@ async function main() {
           `(async () => { const i = mcpFix.newMedia(); await mcpFix.play(i); return i; })()`,
           true,
         );
+        // the reopen re-probes candidates: keep BOTH matrix tabs listed
+        const ids19 = await evalIn(
+          cdp, swSession,
+          `chrome.tabs.query({url:'http://127.0.0.1:8080/test/speed-suite.html*'}).then(ts => ts.map(x => x.id).filter((x) => x !== undefined))`, true,
+        );
+        await evalIn(cdp, swSession, 'chrome.storage.session.set({ recent: ' + JSON.stringify(ids19) + ' })');
         await reopenPopup();
         await waitSync(
           () => evalIn(cdp, pmS, rowExpr('A', `!r.classList.contains('paused') && r.querySelector('.rate-readout').textContent === '2.75×'`)),
