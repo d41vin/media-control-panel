@@ -145,6 +145,7 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
   const local = new Map();
   // extension API call logs — the background harness asserts on these
   const scriptingCalls = [];
+  const pageListeners = new Map(); // tabId -> fake-page onMessage listeners
   const sentTabMessages = [];
 
   const addTab = (def) => {
@@ -206,12 +207,13 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
        */
       async sendMessage(msg) {
         for (const fn of [...runtimeMessageHandlers]) {
-          await fn(msg, {
+          const response = await fn(msg, {
             id: 'mock-extension',
             tab: msg.__senderTab,
             documentId: msg.__senderDocId,
             frameId: msg.__senderFrameId ?? 0,
           });
+          if (response !== undefined) return response;
         }
       },
       async getContexts({ contextTypes } = {}) {
@@ -282,8 +284,11 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
         for (const fn of onRemoved) fn(id);
       },
       async sendMessage(tabId, msg) {
-        // no page-level managers exist in the mock; record for assertions
+        // deliver to a registered fake-page listener (the manager registers
+        // chrome.runtime.onMessage in its frame) AND record for assertions —
+        // the real transport, so background→page applies are exercised
         sentTabMessages.push({ tabId, msg });
+        for (const fn of pageListeners.get(tabId) ?? []) await fn(msg);
       },
       onUpdated: { addListener: (fn) => onUpdated.push(fn) },
       onRemoved: { addListener: (fn) => onRemoved.push(fn) },
@@ -383,7 +388,11 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
             changes[k] = { oldValue: map.get(k), newValue: v };
             map.set(k, v);
           }
-          for (const fn of storageChanged) fn(changes, name);
+          // real Chrome delivers onChanged asynchronously after the write
+          // commits — queue behind a microtask, values already applied
+          queueMicrotask(() => {
+            for (const fn of storageChanged) fn(changes, name);
+          });
         },
         async remove(key) {
           const oldValue = map.get(key);
@@ -495,7 +504,13 @@ export function installMockChrome({ sessionSeed = {} } = {}) {
       },
       offscreenCreateGate: null,
       tabCaptureGates: new Map(),
-      /** Fail the next executeScript for this tab with this error (once) —
+      /** Register a fake-page onMessage listener: chrome.tabs.sendMessage
+        delivers to it (the real background-to-manager transport). */
+    addPageListener(tabId, fn) {
+      if (!pageListeners.has(tabId)) pageListeners.set(tabId, []);
+      pageListeners.get(tabId).push(fn);
+    },
+    /** Fail the next executeScript for this tab with this error (once) —
           the deterministic way to exercise the worker's transient-failure
           retry classification. */
       failNextExecuteScript(tabId, message) {
