@@ -39,6 +39,11 @@ import {
   saveGlobalSpeed,
 } from './lib/speed.js';
 
+// The popup's belt for a boost start that never reports back. The worker
+// converges its own state at 12 s (plans: BOOST_START_TIMEOUT_MS); this is
+// the last line of defense, armed 3 s behind it.
+const BOOST_RESULT_BELT_MS = 15000;
+
 const listEl = document.getElementById('list');
 const emptyEl = document.getElementById('empty');
 const countEl = document.getElementById('count');
@@ -518,6 +523,7 @@ function makeRow(tab) {
     pendingBoost: null,
     boostStarting: false,
     errorTimer: undefined,
+    beltTimer: undefined,
   };
   rows.set(tab.id, self);
   wireCard(self);
@@ -791,6 +797,14 @@ function setBoostLocal(tabId, state) {
   if (state) boostStates.set(tabId, state);
   else boostStates.delete(tabId);
   const rec = rows.get(tabId);
+  // any terminal transition cancels that attempt's belt (pending → active /
+  // error / cleared); a NEW attempt re-arms its own in scheduleBoostResult-
+  // Timeout — a stale belt from a failed attempt must never stamp a lying
+  // error over a legitimate retry
+  if (rec?.beltTimer !== undefined && state?.state !== 'pending') {
+    clearTimeout(rec.beltTimer);
+    rec.beltTimer = undefined;
+  }
   if (rec) updateRow(rec);
 }
 
@@ -806,15 +820,21 @@ function scheduleBoostErrorClear(tabId) {
   if (rec) rec.errorTimer = timer;
 }
 
-/** A start that never reports back (hung capture) must not stay pending. */
+/** A start that never reports back (hung capture) must not stay pending.
+    Re-armed (never stacked) per attempt — each start owns exactly one belt. */
 function scheduleBoostResultTimeout(tabId) {
-  setTimeout(() => {
+  const rec = rows.get(tabId);
+  if (rec?.beltTimer !== undefined) clearTimeout(rec.beltTimer);
+  const timer = setTimeout(() => {
+    const r = rows.get(tabId);
+    if (r) r.beltTimer = undefined;
     const cur = boostStates.get(tabId);
     if (cur?.state === 'pending') {
       setBoostLocal(tabId, { gain: cur.gain, state: 'error', error: 'Capture did not start' });
       scheduleBoostErrorClear(tabId);
     }
-  }, 15000); // the worker converges its own state at 12 s; this is the belt
+  }, BOOST_RESULT_BELT_MS);
+  if (rec) rec.beltTimer = timer;
 }
 
 /**
@@ -850,6 +870,10 @@ async function boostDisable(rec) {
   if (rec.boostTimer !== undefined) {
     clearTimeout(rec.boostTimer);
     rec.boostTimer = undefined;
+  }
+  if (rec.beltTimer !== undefined) {
+    clearTimeout(rec.beltTimer);
+    rec.beltTimer = undefined;
   }
   rec.pendingBoost = null;
   rec.boostStarting = false;
@@ -1349,6 +1373,10 @@ function removeRow(tabId) {
   if (rec.errorTimer !== undefined) {
     clearTimeout(rec.errorTimer);
     rec.errorTimer = undefined;
+  }
+  if (rec.beltTimer !== undefined) {
+    clearTimeout(rec.beltTimer);
+    rec.beltTimer = undefined;
   }
   rec.nodes.li.remove();
   rows.delete(tabId);

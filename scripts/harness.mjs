@@ -51,7 +51,7 @@ class Cdp {
       }
     });
   }
-  send(method, params = {}, sessionId) {
+  send(method, params = {}, sessionId, timeoutMs = 20000) {
     const id = ++this.id;
     const payload = { id, method, params };
     if (sessionId) payload.sessionId = sessionId;
@@ -63,13 +63,18 @@ class Cdp {
           this.pending.delete(id);
           reject(new Error(`CDP timeout: ${method}`));
         }
-      }, 20000);
+      }, timeoutMs);
     });
   }
 }
 
-async function evalIn(cdp, sessionId, expression, awaitPromise = false) {
-  const r = await cdp.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise }, sessionId);
+async function evalIn(cdp, sessionId, expression, awaitPromise = false, timeoutMs = 20000) {
+  const r = await cdp.send(
+    'Runtime.evaluate',
+    { expression, returnByValue: true, awaitPromise },
+    sessionId,
+    timeoutMs,
+  );
   if (r.exceptionDetails) {
     throw new Error(`eval failed: ${r.exceptionDetails.exception?.description ?? r.exceptionDetails.text}`);
   }
@@ -356,6 +361,67 @@ async function main() {
        })()`,
       true,
     );
+    // boost UI in its OWN evaluate (the belt-fairness scenario runs ~16 s in
+    // the page — past the default CDP timeout for a single evaluate)
+    const boost = await evalIn(
+      cdp,
+      pmSession,
+      `(async () => {
+         const first = document.querySelector('.row');
+         first.querySelector('.boost-btn').click();
+         await new Promise((r) => setTimeout(r, 150));
+         const out = {};
+         const bslider = first.querySelector('.boost');
+         bslider.value = '250';
+         bslider.dispatchEvent(new Event('input', { bubbles: true }));
+         await new Promise((r) => setTimeout(r, 300));
+         out.activeGain = (await chrome.storage.session.get('boosts')).boosts?.[1]?.gain;
+         bslider.value = '300';
+         bslider.dispatchEvent(new Event('input', { bubbles: true }));
+         await new Promise((r) => setTimeout(r, 300));
+         out.gainMoved = (await chrome.storage.session.get('boosts')).boosts?.[1]?.gain;
+         first.querySelector('.boost-reset').click();
+         await new Promise((r) => setTimeout(r, 200));
+         out.stopped = !(await chrome.storage.session.get('boosts')).boosts?.[1];
+         // belt fairness: attempt 1 fails fast (belt-1 armed at t≈0, deadline
+         // t≈15); attempt 2 starts ~1 s later and is HELD pending — pre-fix,
+         // belt-1 fires at t≈15 over the legitimately pending attempt and
+         // stamps "Capture did not start"; post-fix, attempt 2 re-armed the
+         // belt (belt-1 gone) and the start lands before attempt 2's own belt
+         chrome._mock.boostFailNext = true;
+         bslider.value = '150';
+         bslider.dispatchEvent(new Event('input', { bubbles: true }));
+         await new Promise((r) => setTimeout(r, 150));
+         out.failText = first.querySelector('.boost-status').textContent;
+         await new Promise((r) => setTimeout(r, 850)); // attempt 2 ~1 s after attempt 1
+         chrome._mock.boostHoldPending = true;
+         bslider.value = '160';
+         bslider.dispatchEvent(new Event('input', { bubbles: true }));
+         await new Promise((r) => setTimeout(r, 150));
+         out.retryPending = first.querySelector('.boost-readout').textContent === '…';
+         const errorsSeen = new Set();
+         const releaseAt = Date.now() + 14200; // before attempt 2's own belt (≈16 s)
+         while (Date.now() < releaseAt) {
+           errorsSeen.add(first.querySelector('.boost-status').textContent);
+           await new Promise((r) => setTimeout(r, 400));
+         }
+         chrome._mock.boostHoldPending = false; // the start lands, pipeline goes active
+         const beltDeadline = Date.now() + 4000;
+         while (Date.now() < beltDeadline) {
+           errorsSeen.add(first.querySelector('.boost-status').textContent);
+           const st = (await chrome.storage.session.get('boosts')).boosts?.[1];
+           if (st?.state === 'active') break;
+           await new Promise((r) => setTimeout(r, 300));
+         }
+         out.noLyingError = !errorsSeen.has('Capture did not start');
+         out.finalActive = (await chrome.storage.session.get('boosts')).boosts?.[1]?.state === 'active';
+         first.querySelector('.boost-reset').click();
+         await new Promise((r) => setTimeout(r, 200));
+         return out;
+       })()`,
+      true,
+      45000,
+    );
     // let any async fallout surface
     await sleep(800);
     const themeOk =
@@ -387,16 +453,25 @@ async function main() {
       pmState?.popInert?.initialInert === true &&
       pmState.popInert.openOk === true &&
       pmState.popInert.closedOk === true;
+    const b = boost;
+    const boostOk =
+      b?.activeGain === 250 &&
+      b?.gainMoved === 300 &&
+      b?.stopped === true &&
+      b?.failText === 'mock capture refused' &&
+      b?.retryPending === true &&
+      b?.noLyingError === true &&
+      b?.finalActive === true;
     if (cdp.pageErrors.length) {
       failed = true;
       for (const e of cdp.pageErrors) console.error(`FAIL  popup-mock page error: ${e}`);
     } else if (pmRows < 1 || !pmState.gspeed.startsWith('1.25')) {
       failed = true;
       console.error(`FAIL  popup-mock smoke: rows=${pmRows} state=${JSON.stringify(pmState)}`);
-    } else if (!themeOk || !stepsOk || !muteOk || !audioTruthsOk || !popInertOk) {
+    } else if (!themeOk || !stepsOk || !muteOk || !audioTruthsOk || !popInertOk || !boostOk) {
       failed = true;
       console.error(
-        `FAIL  popup-mock behavior: theme=${themeOk} steps=${stepsOk} mute=${muteOk} audioTruths=${audioTruthsOk} popInert=${popInertOk} state=${JSON.stringify(pmState)}`,
+        `FAIL  popup-mock behavior: theme=${themeOk} steps=${stepsOk} mute=${muteOk} audioTruths=${audioTruthsOk} popInert=${popInertOk} boost=${boostOk} state=${JSON.stringify(pmState)}`,
       );
     } else {
       console.log(`  ok  popup-mock smoke: ${pmRows} row(s), global ${pmState.gspeed}, override shown: ${pmState.overridden}`);
@@ -406,6 +481,7 @@ async function main() {
       console.log('  ok  popup-mock quick mute stays muted for 3.3 s (browser + UI)');
       console.log('  ok  popup-mock volume popover: tab audio and player audio independent, player toggle writes the element');
       console.log('  ok  popup-mock popovers: collapsed popovers are inert, the open one interactive, click-away re-inerts');
+      console.log('  ok  popup-mock boost: start→gain→stop, truthful failure, and the belt is per-attempt (no lying error over a retry)');
     }
 
     if (failed) process.exitCode = 1;

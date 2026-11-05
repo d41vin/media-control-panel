@@ -209,6 +209,12 @@
       void (async () => {
         if (!msg || typeof msg.type !== 'string') return;
         if (msg.type === 'mcp-speed-page') {
+          // refusal knob: a command that never lands drives the popup's
+          // fallback-to-stored-truth path (plan 006)
+          if (chrome._mock.refuseSpeedPage) {
+            chrome._mock.refuseSpeedPage = false;
+            return;
+          }
           const { speedOverrides } = await chrome.storage.session.get('speedOverrides');
           const map = speedOverrides ?? {};
           map[msg.tabId] = { url: mock.tabs.get(msg.tabId)?.url, rate: msg.rate, at: Date.now() };
@@ -224,15 +230,27 @@
           await applyRate(msg.tabId);
         } else if (msg.type === 'mcp-boost-start') {
           // simulate the worker's capture flow: the tab is "capturable", so
-          // the start succeeds and the pipeline reports active
+          // the start succeeds and the pipeline reports active. Knobs: a
+          // failing start (boostFailNext) and a legitimately held-pending
+          // start (boostHoldPending) let the harness exercise truthful
+          // failure and the belt's per-attempt fairness.
           const map = await boostsMap();
-          map[msg.tabId] = { gain: msg.gain, state: 'pending' };
-          await chrome.storage.session.set({ boosts: map });
-          await new Promise((r) => setTimeout(r, 60));
-          const cur = await boostsMap();
-          if (cur[msg.tabId]?.state === 'pending') {
-            cur[msg.tabId] = { gain: msg.gain, state: 'active' };
-            await chrome.storage.session.set({ boosts: cur });
+          if (chrome._mock.boostFailNext) {
+            chrome._mock.boostFailNext = false;
+            map[msg.tabId] = { gain: msg.gain, state: 'error', error: 'mock capture refused' };
+            await chrome.storage.session.set({ boosts: map });
+          } else {
+            map[msg.tabId] = { gain: msg.gain, state: 'pending' };
+            await chrome.storage.session.set({ boosts: map });
+            const held = Date.now();
+            while (chrome._mock.boostHoldPending && Date.now() - held < 20000) {
+              await new Promise((r) => setTimeout(r, 50));
+            }
+            const cur = await boostsMap();
+            if (cur[msg.tabId]?.state === 'pending') {
+              cur[msg.tabId] = { gain: msg.gain, state: 'active' };
+              await chrome.storage.session.set({ boosts: cur });
+            }
           }
         } else if (msg.type === 'mcp-boost-gain') {
           const map = await boostsMap();
