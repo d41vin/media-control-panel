@@ -23,7 +23,10 @@ createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? '/', 'http://localhost');
     let file = path.join(root, decodeURIComponent(url.pathname));
-    if (!file.startsWith(root)) throw new Error('forbidden');
+    // real containment: a prefix startsWith would let a sibling directory
+    // whose name extends the root through (…\media-control-panel-2)
+    const rel = path.relative(root, file);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error('forbidden');
     if (file.endsWith('/') || file.endsWith(path.sep)) file = path.join(file, 'index.html');
     const body = await readFile(file);
     res.writeHead(200, { 'content-type': types[path.extname(file)] ?? 'application/octet-stream' });
@@ -32,4 +35,6 @@ createServer(async (req, res) => {
     res.writeHead(404);
     res.end('not found');
   }
-}).listen(port, () => console.log(`serving ${root} at http://localhost:${port}/test/media-page.html`));
+}).listen(port, '127.0.0.1', () =>
+  console.log(`serving ${root} at http://localhost:${port}/test/media-page.html (loopback only)`),
+);
